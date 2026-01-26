@@ -30,7 +30,7 @@ impl DbState {
 
     fn db_path() -> PathBuf {
         let mut path = dirs_next().unwrap_or_else(|| PathBuf::from("."));
-        path.push("cc-sublime");
+        path.push("jana");
         std::fs::create_dir_all(&path).ok();
         path.push("notes.db");
         path
