@@ -1,4 +1,4 @@
-# CC Sublime
+# Jana
 
 A lightweight desktop note-taking app with local AI summarization. Write notes, and get concise AI-generated summaries powered by your own local LLM.
 
@@ -15,10 +15,10 @@ This app is not signed with an Apple Developer certificate. macOS will block it 
 
 ### macOS — First Launch
 
-1. Open the `.dmg` and drag **CC Sublime** to Applications
-2. On first launch, macOS will show "CC Sublime can't be opened because Apple cannot check it for malicious software"
+1. Open the `.dmg` and drag **Jana** to Applications
+2. On first launch, macOS will show "Jana can't be opened because Apple cannot check it for malicious software"
 3. Open **System Settings > Privacy & Security**
-4. Scroll down — you'll see a message about CC Sublime being blocked
+4. Scroll down — you'll see a message about Jana being blocked
 5. Click **Open Anyway**
 6. Confirm the dialog
 
@@ -33,7 +33,7 @@ If Windows Defender SmartScreen blocks the app:
 
 ## Configuring Your LLM
 
-CC Sublime works with any OpenAI-compatible chat completions API (LM Studio, Ollama, vLLM, OpenAI, etc.).
+Jana works with any OpenAI-compatible chat completions API (LM Studio, Ollama, vLLM, OpenAI, etc.).
 
 ### Setup
 
@@ -60,6 +60,6 @@ Settings persist across app restarts.
 
 Notes and settings are stored in SQLite at:
 
-- **macOS:** `~/Library/Application Support/cc-sublime/notes.db`
-- **Linux:** `~/.local/share/cc-sublime/notes.db`
-- **Windows:** `%APPDATA%/cc-sublime/notes.db`
+- **macOS:** `~/Library/Application Support/jana/notes.db`
+- **Linux:** `~/.local/share/jana/notes.db`
+- **Windows:** `%APPDATA%/jana/notes.db`
