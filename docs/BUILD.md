@@ -20,7 +20,7 @@ npm run tauri dev
 npm run tauri build
 ```
 
-Output: `src-tauri/target/release/bundle/dmg/CC Sublime_0.1.0_aarch64.dmg`
+Output: `src-tauri/target/release/bundle/dmg/Jana_0.1.0_aarch64.dmg`
 
 ### macOS Intel (x86_64) — Cross-compile from ARM
 
@@ -36,7 +36,7 @@ Build:
 npm run tauri build -- --target x86_64-apple-darwin
 ```
 
-Output: `src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/CC Sublime_0.1.0_x64.dmg`
+Output: `src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/Jana_0.1.0_x64.dmg`
 
 To remove the Intel target after building:
 
