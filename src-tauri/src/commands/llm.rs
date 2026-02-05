@@ -4,12 +4,15 @@ use tauri::State;
 use uuid::Uuid;
 
 use crate::db::DbState;
+use crate::frontmatter;
 
 #[derive(Debug, Serialize, Deserialize, FromRow)]
-pub struct AiSummary {
+pub struct AiInteraction {
     pub id: String,
-    pub note_id: String,
-    pub summary: String,
+    pub jana_id: String,
+    pub interaction_type: String,
+    pub prompt: Option<String>,
+    pub response: String,
     pub model: String,
     pub created_at: i64,
 }
@@ -43,8 +46,12 @@ struct ResponseMessage {
 }
 
 #[tauri::command]
-pub async fn summarize_note(note_id: String, state: State<'_, DbState>) -> Result<AiSummary, String> {
-    // Read LLM settings from database
+pub async fn summarize_file(
+    jana_id: String,
+    file_path: String,
+    state: State<'_, DbState>,
+) -> Result<AiInteraction, String> {
+    // Read LLM settings
     let llm_url: String = sqlx::query_scalar("SELECT value FROM settings WHERE key = 'llm_url'")
         .fetch_one(&state.pool)
         .await
@@ -55,14 +62,11 @@ pub async fn summarize_note(note_id: String, state: State<'_, DbState>) -> Resul
         .await
         .map_err(|e| e.to_string())?;
 
-    // Fetch note content
-    let content: String = sqlx::query_scalar("SELECT content FROM notes WHERE id = ?")
-        .bind(&note_id)
-        .fetch_one(&state.pool)
-        .await
-        .map_err(|e| e.to_string())?;
+    // Read content from file, strip frontmatter
+    let raw = std::fs::read_to_string(&file_path)
+        .map_err(|e| format!("Failed to read file: {}", e))?;
+    let parsed = frontmatter::parse_frontmatter(&raw);
 
-    // Call LM Studio
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(60))
         .build()
@@ -77,7 +81,7 @@ pub async fn summarize_note(note_id: String, state: State<'_, DbState>) -> Resul
             },
             ChatMessage {
                 role: "user".to_string(),
-                content,
+                content: parsed.content,
             },
         ],
         temperature: 0.3,
@@ -101,42 +105,53 @@ pub async fn summarize_note(note_id: String, state: State<'_, DbState>) -> Resul
         .map(|c| c.message.content.clone())
         .ok_or_else(|| "No response from LLM".to_string())?;
 
-    // Store summary
     let now = chrono::Utc::now().timestamp();
-    let summary = AiSummary {
+    let interaction = AiInteraction {
         id: Uuid::new_v4().to_string(),
-        note_id: note_id.clone(),
-        summary: summary_text,
+        jana_id: jana_id.clone(),
+        interaction_type: "summary".to_string(),
+        prompt: None,
+        response: summary_text,
         model: llm_model,
         created_at: now,
     };
 
-    // Upsert: replace existing summary for this note
-    sqlx::query("DELETE FROM ai_summaries WHERE note_id = ?")
-        .bind(&note_id)
+    // Upsert: replace existing summary for this jana_id
+    sqlx::query("DELETE FROM file_ai_interactions WHERE jana_id = ? AND interaction_type = 'summary'")
+        .bind(&jana_id)
         .execute(&state.pool)
         .await
         .map_err(|e| e.to_string())?;
 
-    sqlx::query("INSERT INTO ai_summaries (id, note_id, summary, model, created_at) VALUES (?, ?, ?, ?, ?)")
-        .bind(&summary.id)
-        .bind(&summary.note_id)
-        .bind(&summary.summary)
-        .bind(&summary.model)
-        .bind(summary.created_at)
-        .execute(&state.pool)
-        .await
-        .map_err(|e| e.to_string())?;
+    sqlx::query(
+        "INSERT INTO file_ai_interactions (id, jana_id, interaction_type, prompt, response, model, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+    )
+    .bind(&interaction.id)
+    .bind(&interaction.jana_id)
+    .bind(&interaction.interaction_type)
+    .bind(&interaction.prompt)
+    .bind(&interaction.response)
+    .bind(&interaction.model)
+    .bind(interaction.created_at)
+    .execute(&state.pool)
+    .await
+    .map_err(|e| e.to_string())?;
 
-    Ok(summary)
+    Ok(interaction)
 }
 
 #[tauri::command]
-pub async fn get_summary(note_id: String, state: State<'_, DbState>) -> Result<Option<AiSummary>, String> {
-    sqlx::query_as::<_, AiSummary>(
-        "SELECT id, note_id, summary, model, created_at FROM ai_summaries WHERE note_id = ? ORDER BY created_at DESC LIMIT 1"
+pub async fn get_file_summary(
+    jana_id: String,
+    state: State<'_, DbState>,
+) -> Result<Option<AiInteraction>, String> {
+    sqlx::query_as::<_, AiInteraction>(
+        "SELECT id, jana_id, interaction_type, prompt, response, model, created_at
+         FROM file_ai_interactions
+         WHERE jana_id = ? AND interaction_type = 'summary'
+         ORDER BY created_at DESC LIMIT 1"
     )
-    .bind(&note_id)
+    .bind(&jana_id)
     .fetch_optional(&state.pool)
     .await
     .map_err(|e| e.to_string())

@@ -6,23 +6,24 @@ import { markdown } from "@codemirror/lang-markdown";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { debounce } from "lodash-es";
-import { getNote, saveNote } from "../composables/useNotes";
+import { saveFile } from "../composables/useFiles";
 
 const props = defineProps<{
-  noteId: string | null;
+  filePath: string | null;
+  janaId: string | null;
+  content: string;
 }>();
 
 const editorRef = ref<HTMLDivElement>();
 const saveStatus = ref<"saved" | "saving" | "idle">("idle");
 let editorView: EditorView | null = null;
-let currentNoteId: string | null = null;
+let currentFilePath: string | null = null;
+let currentJanaId: string | null = null;
 
-const debouncedSave = debounce(async (id: string, content: string) => {
+const debouncedSave = debounce(async (filePath: string, janaId: string, content: string) => {
   saveStatus.value = "saving";
-  const firstLine = content.split("\n")[0]?.trim() || null;
-  const title = firstLine && firstLine.length > 0 ? firstLine.slice(0, 100) : null;
   try {
-    await saveNote(id, title, content);
+    await saveFile(filePath, janaId, content);
     saveStatus.value = "saved";
   } catch (e) {
     console.error("Save failed:", e);
@@ -45,9 +46,9 @@ function createEditor(content: string) {
       markdown(),
       oneDark,
       EditorView.updateListener.of((update) => {
-        if (update.docChanged && currentNoteId) {
+        if (update.docChanged && currentFilePath && currentJanaId) {
           saveStatus.value = "idle";
-          debouncedSave(currentNoteId, update.state.doc.toString());
+          debouncedSave(currentFilePath, currentJanaId, update.state.doc.toString());
         }
       }),
       EditorView.theme({
@@ -64,28 +65,23 @@ function createEditor(content: string) {
   });
 }
 
-async function loadNote(id: string) {
-  currentNoteId = id;
+function loadFile(filePath: string, janaId: string, content: string) {
+  currentFilePath = filePath;
+  currentJanaId = janaId;
   saveStatus.value = "idle";
-  try {
-    const note = await getNote(id);
-    createEditor(note.content || "");
-  } catch (e) {
-    console.error("Failed to load note:", e);
-    createEditor("");
-  }
+  createEditor(content);
 }
 
 // Save on window blur
 function onBlur() {
-  if (currentNoteId && editorView) {
+  if (currentFilePath && editorView) {
     debouncedSave.flush();
   }
 }
 
 onMounted(() => {
   window.addEventListener("blur", onBlur);
-  if (!props.noteId) {
+  if (!props.filePath) {
     createEditor("");
   }
 });
@@ -97,14 +93,15 @@ onUnmounted(() => {
 });
 
 watch(
-  () => props.noteId,
-  (newId) => {
-    if (newId) {
-      // Flush any pending save for previous note
-      debouncedSave.flush();
-      loadNote(newId);
+  () => props.filePath,
+  (newPath) => {
+    // Flush any pending save for previous file
+    debouncedSave.flush();
+    if (newPath && props.janaId) {
+      loadFile(newPath, props.janaId, props.content);
     } else {
-      currentNoteId = null;
+      currentFilePath = null;
+      currentJanaId = null;
       createEditor("");
     }
   }

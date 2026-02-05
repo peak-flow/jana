@@ -2,6 +2,7 @@
 
 mod commands;
 mod db;
+mod frontmatter;
 
 use db::DbState;
 
@@ -13,15 +14,20 @@ fn main() {
     });
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(db_state)
         .invoke_handler(tauri::generate_handler![
-            commands::notes::create_note,
-            commands::notes::save_note,
-            commands::notes::get_note,
-            commands::notes::list_notes,
-            commands::notes::delete_note,
-            commands::llm::summarize_note,
-            commands::llm::get_summary,
+            commands::files::open_file_dialog,
+            commands::files::read_file,
+            commands::files::save_file,
+            commands::files::save_file_as,
+            commands::files::close_file,
+            commands::files::list_open_files,
+            commands::files::update_cursor_position,
+            commands::files::fork_file,
+            commands::files::clear_ai_history,
+            commands::llm::summarize_file,
+            commands::llm::get_file_summary,
             commands::settings::get_settings,
             commands::settings::save_settings,
         ])

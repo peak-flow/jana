@@ -1,89 +1,47 @@
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
-import { listNotes, createNote, type NoteListItem } from "../composables/useNotes";
+import type { ActiveFile } from "../App.vue";
 
 defineProps<{
-  activeNoteId: string | null;
+  openFiles: ActiveFile[];
+  activeFilePath: string | null;
 }>();
 
 const emit = defineEmits<{
-  (e: "select-note", id: string): void;
-  (e: "new-note", id: string): void;
+  (e: "open-file"): void;
+  (e: "select-file", filePath: string): void;
+  (e: "close-file", filePath: string): void;
   (e: "open-settings"): void;
 }>();
 
-const notes = ref<NoteListItem[]>([]);
-
-async function refreshNotes() {
-  try {
-    notes.value = await listNotes();
-  } catch (e) {
-    console.error("Failed to list notes:", e);
-  }
+function handleCloseFile(event: Event, filePath: string) {
+  event.stopPropagation();
+  emit("close-file", filePath);
 }
-
-async function handleNewNote() {
-  try {
-    const note = await createNote();
-    await refreshNotes();
-    emit("new-note", note.id);
-  } catch (e) {
-    console.error("Failed to create note:", e);
-  }
-}
-
-function selectNote(id: string) {
-  emit("select-note", id);
-}
-
-function formatDate(timestamp: number): string {
-  return new Date(timestamp * 1000).toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-  });
-}
-
-onMounted(async () => {
-  await refreshNotes();
-  // Auto-select first note or create one
-  if (notes.value.length > 0) {
-    emit("select-note", notes.value[0].id);
-  } else {
-    await handleNewNote();
-  }
-});
-
-// Refresh list periodically to catch autosaved title changes
-let interval: ReturnType<typeof setInterval>;
-onMounted(() => {
-  interval = setInterval(refreshNotes, 5000);
-});
-
-import { onUnmounted } from "vue";
-onUnmounted(() => {
-  clearInterval(interval);
-});
 </script>
 
 <template>
   <div class="sidebar">
     <div class="sidebar-header">
-      <span class="sidebar-title">Notes</span>
-      <button class="new-note-btn" @click="handleNewNote" title="New Note">+</button>
+      <span class="sidebar-title">Open Files</span>
+      <button class="open-file-btn" @click="emit('open-file')" title="Open File">+</button>
     </div>
-    <div class="note-list">
+    <div class="file-list">
       <div
-        v-for="note in notes"
-        :key="note.id"
-        class="note-item"
-        :class="{ active: note.id === activeNoteId }"
-        @click="selectNote(note.id)"
+        v-for="file in openFiles"
+        :key="file.filePath"
+        class="file-item"
+        :class="{ active: file.filePath === activeFilePath }"
+        @click="emit('select-file', file.filePath)"
       >
-        <span class="note-title">{{ note.title || "Untitled" }}</span>
-        <span class="note-date">{{ formatDate(note.updated_at) }}</span>
+        <span class="file-name">{{ file.fileName }}</span>
+        <button
+          class="close-btn"
+          @click="handleCloseFile($event, file.filePath)"
+          title="Close"
+        >&times;</button>
       </div>
-      <div v-if="notes.length === 0" class="empty-state">
-        No notes yet
+      <div v-if="openFiles.length === 0" class="empty-state">
+        No files open
       </div>
     </div>
     <div class="sidebar-footer">
@@ -121,7 +79,7 @@ onUnmounted(() => {
   color: #cdd6f4;
 }
 
-.new-note-btn {
+.open-file-btn {
   background: none;
   border: 1px solid #45475a;
   color: #cdd6f4;
@@ -135,43 +93,62 @@ onUnmounted(() => {
   justify-content: center;
 }
 
-.new-note-btn:hover {
+.open-file-btn:hover {
   background: #313244;
 }
 
-.note-list {
+.file-list {
   flex: 1;
   overflow-y: auto;
 }
 
-.note-item {
-  padding: 10px 16px;
+.file-item {
+  padding: 8px 16px;
   cursor: pointer;
   border-bottom: 1px solid #313244;
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
 }
 
-.note-item:hover {
+.file-item:hover {
   background: #1e1e2e;
 }
 
-.note-item.active {
+.file-item.active {
   background: #313244;
 }
 
-.note-title {
+.file-name {
   font-size: 13px;
   color: #cdd6f4;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  flex: 1;
 }
 
-.note-date {
-  font-size: 11px;
+.close-btn {
+  background: none;
+  border: none;
   color: #6c7086;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 2px;
+  border-radius: 2px;
+  line-height: 1;
+  opacity: 0;
+}
+
+.file-item:hover .close-btn,
+.file-item.active .close-btn {
+  opacity: 1;
+}
+
+.close-btn:hover {
+  color: #f38ba8;
+  background: rgba(243, 139, 168, 0.1);
 }
 
 .empty-state {

@@ -1,17 +1,24 @@
 import { invoke } from "@tauri-apps/api/core";
 
-export interface AiSummary {
+export interface AiInteraction {
   id: string;
-  note_id: string;
-  summary: string;
+  jana_id: string;
+  interaction_type: string;
+  prompt: string | null;
+  response: string;
   model: string;
   created_at: number;
 }
 
-export async function summarizeNote(noteId: string): Promise<AiSummary> {
-  return invoke<AiSummary>("summarize_note", { noteId });
+export async function summarizeFile(
+  janaId: string,
+  filePath: string
+): Promise<AiInteraction> {
+  return invoke<AiInteraction>("summarize_file", { janaId, filePath });
 }
 
-export async function getSummary(noteId: string): Promise<AiSummary | null> {
-  return invoke<AiSummary | null>("get_summary", { noteId });
+export async function getFileSummary(
+  janaId: string
+): Promise<AiInteraction | null> {
+  return invoke<AiInteraction | null>("get_file_summary", { janaId });
 }

@@ -1,31 +1,32 @@
 <script setup lang="ts">
 import { ref, watch } from "vue";
-import { summarizeNote, getSummary, type AiSummary } from "../composables/useLLM";
+import { summarizeFile, getFileSummary, type AiInteraction } from "../composables/useLLM";
 
 const props = defineProps<{
-  noteId: string | null;
+  janaId: string | null;
+  filePath: string | null;
 }>();
 
-const summary = ref<AiSummary | null>(null);
+const summary = ref<AiInteraction | null>(null);
 const isLoading = ref(false);
 const error = ref<string | null>(null);
 
-async function loadExistingSummary(noteId: string) {
+async function loadExistingSummary(janaId: string) {
   try {
-    summary.value = await getSummary(noteId);
+    summary.value = await getFileSummary(janaId);
   } catch (e) {
     summary.value = null;
   }
 }
 
 async function handleSummarize() {
-  if (!props.noteId) return;
+  if (!props.janaId || !props.filePath) return;
 
   isLoading.value = true;
   error.value = null;
 
   try {
-    summary.value = await summarizeNote(props.noteId);
+    summary.value = await summarizeFile(props.janaId, props.filePath);
   } catch (e) {
     error.value = String(e);
   } finally {
@@ -43,7 +44,7 @@ function formatDate(timestamp: number): string {
 }
 
 watch(
-  () => props.noteId,
+  () => props.janaId,
   (newId) => {
     error.value = null;
     if (newId) {
@@ -59,10 +60,10 @@ watch(
 <template>
   <div class="summary-panel">
     <div class="panel-header">
-      <span class="panel-title">Summary</span>
+      <span class="panel-title">AI</span>
       <button
         class="summarize-btn"
-        :disabled="!noteId || isLoading"
+        :disabled="!janaId || isLoading"
         @click="handleSummarize"
       >
         {{ isLoading ? "..." : "Summarize" }}
@@ -72,14 +73,14 @@ watch(
       <div v-if="isLoading" class="loading">Generating summary...</div>
       <div v-else-if="error" class="error">{{ error }}</div>
       <div v-else-if="summary" class="summary">
-        <p class="summary-text">{{ summary.summary }}</p>
+        <p class="summary-text">{{ summary.response }}</p>
         <div class="summary-meta">
           <span>{{ summary.model }}</span>
           <span>{{ formatDate(summary.created_at) }}</span>
         </div>
       </div>
       <div v-else class="empty">
-        Select a note and click Summarize
+        Open a file and click Summarize
       </div>
     </div>
   </div>

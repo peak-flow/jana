@@ -22,7 +22,6 @@ impl DbState {
             .connect(&db_url)
             .await?;
 
-        // Run migrations
         Self::run_migrations(&pool).await?;
 
         Ok(DbState { pool })
@@ -32,36 +31,59 @@ impl DbState {
         let mut path = dirs_next().unwrap_or_else(|| PathBuf::from("."));
         path.push("jana");
         std::fs::create_dir_all(&path).ok();
-        path.push("notes.db");
+        path.push("jana.db");
         path
     }
 
     async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+        // Drop old tables from v0.1 notes-based schema
+        let has_notes_table: bool = sqlx::query_scalar(
+            "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='notes'"
+        )
+        .fetch_one(pool)
+        .await?;
+
+        if has_notes_table {
+            sqlx::query("DROP TABLE IF EXISTS ai_summaries").execute(pool).await?;
+            sqlx::query("DROP TABLE IF EXISTS notes").execute(pool).await?;
+        }
+
+        // Session restore: which files are currently open
         sqlx::query(
-            "CREATE TABLE IF NOT EXISTS notes (
-                id TEXT PRIMARY KEY,
-                title TEXT,
-                content TEXT,
-                created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL
+            "CREATE TABLE IF NOT EXISTS open_files (
+                file_path TEXT PRIMARY KEY,
+                jana_id TEXT NOT NULL,
+                tab_order INTEGER NOT NULL DEFAULT 0,
+                cursor_line INTEGER NOT NULL DEFAULT 1,
+                cursor_col INTEGER NOT NULL DEFAULT 1,
+                last_opened INTEGER NOT NULL
             )"
         )
         .execute(pool)
         .await?;
 
+        // AI interactions keyed to jana_id
         sqlx::query(
-            "CREATE TABLE IF NOT EXISTS ai_summaries (
+            "CREATE TABLE IF NOT EXISTS file_ai_interactions (
                 id TEXT PRIMARY KEY,
-                note_id TEXT NOT NULL,
-                summary TEXT NOT NULL,
+                jana_id TEXT NOT NULL,
+                interaction_type TEXT NOT NULL,
+                prompt TEXT,
+                response TEXT NOT NULL,
                 model TEXT NOT NULL,
-                created_at INTEGER NOT NULL,
-                FOREIGN KEY(note_id) REFERENCES notes(id)
+                created_at INTEGER NOT NULL
             )"
         )
         .execute(pool)
         .await?;
 
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_fai_jana_id ON file_ai_interactions(jana_id)"
+        )
+        .execute(pool)
+        .await?;
+
+        // Settings table
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
