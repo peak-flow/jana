@@ -5,7 +5,7 @@ use tauri::State;
 use tauri_plugin_dialog::DialogExt;
 use uuid::Uuid;
 
-use crate::db::DbState;
+use crate::db::{DbState, dirs_next};
 use crate::frontmatter;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -26,12 +26,76 @@ pub struct OpenFileEntry {
     pub last_opened: i64,
 }
 
+fn temp_dir() -> Result<std::path::PathBuf, String> {
+    let mut path = dirs_next().ok_or("Cannot determine app support directory")?;
+    path.push("jana");
+    path.push("temp");
+    std::fs::create_dir_all(&path).map_err(|e| format!("Failed to create temp dir: {}", e))?;
+    Ok(path)
+}
+
+pub fn is_temp_file(file_path: &str) -> bool {
+    if let Ok(td) = temp_dir() {
+        file_path.starts_with(&td.to_string_lossy().to_string())
+    } else {
+        false
+    }
+}
+
 fn file_name_from_path(path: &str) -> String {
     Path::new(path)
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("unknown")
         .to_string()
+}
+
+#[tauri::command]
+pub async fn create_new_file(
+    state: State<'_, DbState>,
+) -> Result<OpenFileResult, String> {
+    let td = temp_dir()?;
+
+    // Find next available "Untitled N.md"
+    let mut n = 1u32;
+    loop {
+        let name = format!("Untitled {}.md", n);
+        let path = td.join(&name);
+        if !path.exists() {
+            break;
+        }
+        n += 1;
+    }
+
+    let file_name = format!("Untitled {}.md", n);
+    let file_path = td.join(&file_name).to_string_lossy().to_string();
+    let jana_id = Uuid::new_v4().to_string();
+
+    // Write empty file with frontmatter
+    let full = frontmatter::compose_with_frontmatter(&jana_id, "");
+    std::fs::write(&file_path, &full)
+        .map_err(|e| format!("Failed to create temp file: {}", e))?;
+
+    let now = chrono::Utc::now().timestamp();
+
+    // Add to open_files
+    sqlx::query(
+        "INSERT OR REPLACE INTO open_files (file_path, jana_id, tab_order, cursor_line, cursor_col, last_opened)
+         VALUES (?, ?, (SELECT COALESCE(MAX(tab_order), 0) + 1 FROM open_files), 1, 1, ?)"
+    )
+    .bind(&file_path)
+    .bind(&jana_id)
+    .bind(now)
+    .execute(&state.pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(OpenFileResult {
+        file_path,
+        jana_id,
+        content: String::new(),
+        file_name,
+    })
 }
 
 #[tauri::command]
@@ -176,6 +240,11 @@ pub async fn close_file(
         .await
         .map_err(|e| e.to_string())?;
 
+    // Delete temp files from disk when closed
+    if is_temp_file(&file_path) {
+        let _ = std::fs::remove_file(&file_path);
+    }
+
     Ok(())
 }
 
@@ -250,4 +319,95 @@ pub async fn clear_ai_history(
         .map_err(|e| e.to_string())?;
 
     Ok(())
+}
+
+#[tauri::command]
+pub async fn reveal_in_finder(file_path: String) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg("-R")
+            .arg(&file_path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg(format!("/select,{}", &file_path))
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let parent = std::path::Path::new(&file_path)
+            .parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| file_path.clone());
+        std::process::Command::new("xdg-open")
+            .arg(&parent)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn save_temp_file_as(
+    app: tauri::AppHandle,
+    file_path: String,
+    jana_id: String,
+    content: String,
+    state: State<'_, DbState>,
+) -> Result<Option<String>, String> {
+    let new_path = app
+        .dialog()
+        .file()
+        .add_filter("Markdown", &["md"])
+        .add_filter("Text", &["txt"])
+        .blocking_save_file();
+
+    let new_path = match new_path {
+        Some(fp) => fp.into_path()
+            .map_err(|e| format!("Invalid file path: {:?}", e))?
+            .to_string_lossy()
+            .to_string(),
+        None => return Ok(None),
+    };
+
+    // Write content to new location
+    let full = frontmatter::compose_with_frontmatter(&jana_id, &content);
+    std::fs::write(&new_path, &full)
+        .map_err(|e| format!("Failed to save file: {}", e))?;
+
+    // Remove old DB entry
+    sqlx::query("DELETE FROM open_files WHERE file_path = ?")
+        .bind(&file_path)
+        .execute(&state.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let now = chrono::Utc::now().timestamp();
+
+    // Insert new entry with real path
+    sqlx::query(
+        "INSERT OR REPLACE INTO open_files (file_path, jana_id, tab_order, cursor_line, cursor_col, last_opened)
+         VALUES (?, ?, (SELECT COALESCE(MAX(tab_order), 0) + 1 FROM open_files), 1, 1, ?)"
+    )
+    .bind(&new_path)
+    .bind(&jana_id)
+    .bind(now)
+    .execute(&state.pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    // Delete old temp file if it was in temp dir
+    if is_temp_file(&file_path) {
+        let _ = std::fs::remove_file(&file_path);
+    }
+
+    Ok(Some(new_path))
 }

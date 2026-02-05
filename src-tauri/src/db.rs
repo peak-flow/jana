@@ -110,7 +110,7 @@ impl DbState {
     }
 }
 
-fn dirs_next() -> Option<PathBuf> {
+pub fn dirs_next() -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
     {
         std::env::var("HOME")

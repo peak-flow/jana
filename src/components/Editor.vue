@@ -98,7 +98,11 @@ function immediatelySave() {
   }
 }
 
-defineExpose({ immediatelySave });
+function getContent(): string {
+  return editorView?.state.doc.toString() ?? "";
+}
+
+defineExpose({ immediatelySave, getContent });
 
 watch(
   () => props.filePath,

@@ -11,6 +11,9 @@ import {
   listOpenFiles,
   forkFile,
   clearAiHistory,
+  revealInFinder,
+  createNewFile,
+  saveTempFileAs,
   type OpenFileResult,
 } from "./composables/useFiles";
 
@@ -93,14 +96,61 @@ async function onClearHistory(janaId: string) {
   }
 }
 
+async function onRevealInFinder(filePath: string) {
+  try {
+    await revealInFinder(filePath);
+  } catch (e) {
+    console.error("Failed to reveal in finder:", e);
+  }
+}
+
+async function handleNewFile() {
+  try {
+    const result = await createNewFile();
+    addFileToList(result);
+  } catch (e) {
+    console.error("Failed to create new file:", e);
+  }
+}
+
+async function handleSaveAs(filePath: string) {
+  try {
+    const file = openFiles.value.find((f) => f.filePath === filePath);
+    if (!file) return;
+    // Flush editor if this is the active file
+    const isActive = activeFile.value?.filePath === filePath;
+    if (isActive) {
+      editorRef.value?.immediatelySave();
+    }
+    const content = isActive
+      ? (editorRef.value?.getContent() ?? file.content)
+      : file.content;
+    const newPath = await saveTempFileAs(filePath, file.janaId, content);
+    if (!newPath) return;
+    file.filePath = newPath;
+    file.fileName = newPath.split("/").pop() ?? newPath;
+    if (isActive) {
+      activeFile.value = file;
+    }
+  } catch (e) {
+    console.error("Failed to save as:", e);
+  }
+}
+
 // Keyboard shortcuts
 function handleKeydown(e: KeyboardEvent) {
   const mod = e.metaKey || e.ctrlKey;
   if (!mod) return;
 
-  if (e.key === "o") {
+  if (e.key === "n") {
+    e.preventDefault();
+    handleNewFile();
+  } else if (e.key === "o") {
     e.preventDefault();
     handleOpenFile();
+  } else if ((e.key === "s" || e.key === "S") && e.shiftKey) {
+    e.preventDefault();
+    if (activeFile.value) handleSaveAs(activeFile.value.filePath);
   } else if (e.key === "s") {
     e.preventDefault();
     editorRef.value?.immediatelySave();
@@ -152,11 +202,14 @@ onMounted(async () => {
     <Sidebar
       :open-files="openFiles"
       :active-file-path="activeFile?.filePath ?? null"
+      @new-file="handleNewFile"
       @open-file="handleOpenFile"
       @select-file="onSelectFile"
       @close-file="onCloseFile"
       @fork-file="onForkFile"
       @clear-history="onClearHistory"
+      @reveal-in-finder="onRevealInFinder"
+      @save-as="handleSaveAs"
       @open-settings="showSettings = true"
     />
     <Editor

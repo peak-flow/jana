@@ -62,3 +62,19 @@ export async function forkFile(filePath: string): Promise<string> {
 export async function clearAiHistory(janaId: string): Promise<void> {
   return invoke("clear_ai_history", { janaId });
 }
+
+export async function revealInFinder(filePath: string): Promise<void> {
+  return invoke("reveal_in_finder", { filePath });
+}
+
+export async function createNewFile(): Promise<OpenFileResult> {
+  return invoke<OpenFileResult>("create_new_file");
+}
+
+export async function saveTempFileAs(
+  filePath: string,
+  janaId: string,
+  content: string
+): Promise<string | null> {
+  return invoke<string | null>("save_temp_file_as", { filePath, janaId, content });
+}

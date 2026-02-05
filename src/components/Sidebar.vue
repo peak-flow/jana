@@ -9,11 +9,14 @@ defineProps<{
 
 const emit = defineEmits<{
   (e: "open-file"): void;
+  (e: "new-file"): void;
   (e: "select-file", filePath: string): void;
   (e: "close-file", filePath: string): void;
   (e: "open-settings"): void;
   (e: "fork-file", filePath: string): void;
   (e: "clear-history", janaId: string): void;
+  (e: "reveal-in-finder", filePath: string): void;
+  (e: "save-as", filePath: string, janaId: string): void;
 }>();
 
 const contextMenu = ref<{ x: number; y: number; filePath: string; janaId: string } | null>(null);
@@ -46,6 +49,20 @@ function handleClearHistory() {
   closeContextMenu();
 }
 
+function handleReveal() {
+  if (contextMenu.value) {
+    emit("reveal-in-finder", contextMenu.value.filePath);
+  }
+  closeContextMenu();
+}
+
+function handleSaveAs() {
+  if (contextMenu.value) {
+    emit("save-as", contextMenu.value.filePath, contextMenu.value.janaId);
+  }
+  closeContextMenu();
+}
+
 function onDocumentClick() {
   closeContextMenu();
 }
@@ -62,8 +79,15 @@ onUnmounted(() => {
 <template>
   <div class="sidebar">
     <div class="sidebar-header">
-      <span class="sidebar-title">Open Files</span>
-      <button class="open-file-btn" @click="emit('open-file')" title="Open File">+</button>
+      <span class="sidebar-title">Files</span>
+      <div style="display: flex; gap: 4px;">
+        <button class="header-btn" @click="emit('open-file')" title="Open File (Cmd+O)">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+            <path d="M2 3h5l2 2h5v8H2V3z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" fill="none"/>
+          </svg>
+        </button>
+        <button class="header-btn" @click="emit('new-file')" title="New File (Cmd+N)">+</button>
+      </div>
     </div>
     <div class="file-list">
       <div
@@ -74,7 +98,7 @@ onUnmounted(() => {
         @click="emit('select-file', file.filePath)"
         @contextmenu="openContextMenu($event, file)"
       >
-        <span class="file-name">{{ file.fileName }}</span>
+        <span class="file-name" :class="{ 'temp-file': file.fileName.startsWith('Untitled ') }">{{ file.fileName }}</span>
         <button
           class="close-btn"
           @click="handleCloseFile($event, file.filePath)"
@@ -92,6 +116,9 @@ onUnmounted(() => {
         :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }"
         @click.stop
       >
+        <button class="context-menu-item" @click="handleSaveAs">Save As...</button>
+        <button class="context-menu-item" @click="handleReveal">Reveal in Finder</button>
+        <div style="height: 1px; background: var(--ctp-surface0, #313244); margin: 4px 0;"></div>
         <button class="context-menu-item" @click="handleFork">Fork File (New Identity)</button>
         <button class="context-menu-item danger" @click="handleClearHistory">Clear AI History</button>
       </div>
@@ -131,7 +158,7 @@ onUnmounted(() => {
   color: #cdd6f4;
 }
 
-.open-file-btn {
+.header-btn {
   background: none;
   border: 1px solid #45475a;
   color: #cdd6f4;
@@ -145,7 +172,7 @@ onUnmounted(() => {
   justify-content: center;
 }
 
-.open-file-btn:hover {
+.header-btn:hover {
   background: #313244;
 }
 
@@ -179,6 +206,11 @@ onUnmounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   flex: 1;
+}
+
+.file-name.temp-file {
+  font-style: italic;
+  color: #a6adc8;
 }
 
 .close-btn {
