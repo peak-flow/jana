@@ -9,6 +9,8 @@ import {
   readFile,
   closeFile,
   listOpenFiles,
+  forkFile,
+  clearAiHistory,
   type OpenFileResult,
 } from "./composables/useFiles";
 
@@ -68,6 +70,26 @@ async function onCloseFile(filePath: string) {
   openFiles.value = openFiles.value.filter((f) => f.filePath !== filePath);
   if (activeFile.value?.filePath === filePath) {
     activeFile.value = openFiles.value.length > 0 ? openFiles.value[0] : null;
+  }
+}
+
+async function onForkFile(filePath: string) {
+  try {
+    const newJanaId = await forkFile(filePath);
+    const file = openFiles.value.find((f) => f.filePath === filePath);
+    if (file) {
+      file.janaId = newJanaId;
+    }
+  } catch (e) {
+    console.error("Failed to fork file:", e);
+  }
+}
+
+async function onClearHistory(janaId: string) {
+  try {
+    await clearAiHistory(janaId);
+  } catch (e) {
+    console.error("Failed to clear AI history:", e);
   }
 }
 
@@ -133,6 +155,8 @@ onMounted(async () => {
       @open-file="handleOpenFile"
       @select-file="onSelectFile"
       @close-file="onCloseFile"
+      @fork-file="onForkFile"
+      @clear-history="onClearHistory"
       @open-settings="showSettings = true"
     />
     <Editor
