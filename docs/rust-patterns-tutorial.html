@@ -1,0 +1,1767 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MVC to Rust - Architecture Patterns Tutorial</title>
+    <style>
+        :root {
+            --rust-orange: #f74c00;
+            --rust-dark: #1a1a1a;
+            --laravel-red: #ff2d20;
+            --tauri-blue: #24c8db;
+            --vue-green: #42b883;
+            --bg-dark: #0d1117;
+            --bg-card: #161b22;
+            --bg-highlight: #1c2128;
+            --text-primary: #e6edf3;
+            --text-secondary: #8b949e;
+            --border-color: #30363d;
+            --success: #3fb950;
+            --warning: #d29922;
+            --error: #f85149;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            background: var(--bg-dark);
+            color: var(--text-primary);
+            line-height: 1.6;
+            overflow-x: hidden;
+        }
+
+        /* Header */
+        header {
+            background: linear-gradient(135deg, #1a0a05 0%, #2d1810 50%, #0d1117 100%);
+            padding: 4rem 2rem;
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        header::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background:
+                radial-gradient(circle at 20% 50%, rgba(247, 76, 0, 0.1) 0%, transparent 50%),
+                radial-gradient(circle at 80% 50%, rgba(36, 200, 219, 0.1) 0%, transparent 50%);
+            animation: headerPulse 4s ease-in-out infinite;
+        }
+
+        @keyframes headerPulse {
+            0%, 100% { opacity: 0.5; }
+            50% { opacity: 1; }
+        }
+
+        h1 {
+            font-size: 2.8rem;
+            margin-bottom: 1rem;
+            position: relative;
+            animation: fadeInUp 0.8s ease-out;
+        }
+
+        .subtitle {
+            color: var(--text-secondary);
+            font-size: 1.2rem;
+            position: relative;
+            animation: fadeInUp 0.8s ease-out 0.2s both;
+        }
+
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(30px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Navigation */
+        nav {
+            background: var(--bg-card);
+            border-bottom: 1px solid var(--border-color);
+            padding: 1rem;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        nav ul {
+            display: flex;
+            justify-content: center;
+            gap: 1.5rem;
+            list-style: none;
+            flex-wrap: wrap;
+        }
+
+        nav a {
+            color: var(--text-secondary);
+            text-decoration: none;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            transition: all 0.3s ease;
+            font-size: 0.95rem;
+        }
+
+        nav a:hover {
+            color: var(--rust-orange);
+            background: rgba(247, 76, 0, 0.1);
+        }
+
+        /* Main Content */
+        main {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        section {
+            margin-bottom: 4rem;
+            opacity: 0;
+            transform: translateY(40px);
+            transition: all 0.6s ease-out;
+        }
+
+        section.visible {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        h2 {
+            font-size: 2rem;
+            margin-bottom: 1.5rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 2px solid var(--rust-orange);
+            display: inline-block;
+        }
+
+        h3 {
+            font-size: 1.4rem;
+            margin: 2rem 0 1rem;
+            color: var(--tauri-blue);
+        }
+
+        h4 {
+            font-size: 1.1rem;
+            margin: 1.5rem 0 0.75rem;
+            color: var(--rust-orange);
+        }
+
+        p {
+            margin-bottom: 1rem;
+            color: var(--text-secondary);
+        }
+
+        /* MVC Flow Comparison */
+        .flow-comparison {
+            display: grid;
+            grid-template-columns: 1fr auto 1fr;
+            gap: 2rem;
+            margin: 2rem 0;
+            align-items: start;
+        }
+
+        @media (max-width: 1000px) {
+            .flow-comparison {
+                grid-template-columns: 1fr;
+            }
+            .flow-arrows {
+                transform: rotate(90deg);
+                justify-self: center;
+            }
+        }
+
+        .flow-stack {
+            background: var(--bg-card);
+            border-radius: 16px;
+            padding: 1.5rem;
+            border: 1px solid var(--border-color);
+        }
+
+        .flow-stack-title {
+            text-align: center;
+            font-size: 1.3rem;
+            font-weight: bold;
+            padding: 1rem;
+            border-radius: 8px;
+            margin-bottom: 1.5rem;
+        }
+
+        .flow-stack-title.laravel {
+            background: linear-gradient(135deg, rgba(255, 45, 32, 0.2), rgba(255, 45, 32, 0.05));
+            border: 1px solid var(--laravel-red);
+        }
+
+        .flow-stack-title.rust {
+            background: linear-gradient(135deg, rgba(247, 76, 0, 0.2), rgba(247, 76, 0, 0.05));
+            border: 1px solid var(--rust-orange);
+        }
+
+        .flow-step {
+            background: var(--bg-dark);
+            border: 2px solid var(--border-color);
+            border-radius: 10px;
+            padding: 1rem;
+            margin: 0.75rem 0;
+            position: relative;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+
+        .flow-step:hover {
+            border-color: var(--tauri-blue);
+            transform: translateX(5px);
+        }
+
+        .flow-step.active {
+            border-color: var(--success);
+            background: rgba(63, 185, 80, 0.1);
+        }
+
+        .flow-step::after {
+            content: '↓';
+            position: absolute;
+            bottom: -20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: var(--text-secondary);
+            font-size: 1.2rem;
+        }
+
+        .flow-step:last-child::after {
+            display: none;
+        }
+
+        .flow-step .label {
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 0.25rem;
+        }
+
+        .flow-step .file {
+            font-size: 0.8rem;
+            color: var(--tauri-blue);
+            font-family: monospace;
+        }
+
+        .flow-step .desc {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            margin-top: 0.5rem;
+        }
+
+        .flow-arrows {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            gap: 1rem;
+            padding-top: 4rem;
+        }
+
+        .mapping-arrow {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+            white-space: nowrap;
+        }
+
+        .mapping-arrow svg {
+            width: 40px;
+            stroke: var(--tauri-blue);
+            animation: arrowPulse 2s ease-in-out infinite;
+        }
+
+        @keyframes arrowPulse {
+            0%, 100% { opacity: 0.5; }
+            50% { opacity: 1; }
+        }
+
+        /* Pattern Cards */
+        .pattern-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 1.5rem;
+            margin: 2rem 0;
+        }
+
+        @media (max-width: 500px) {
+            .pattern-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .pattern-card {
+            background: var(--bg-card);
+            border-radius: 12px;
+            overflow: hidden;
+            border: 1px solid var(--border-color);
+            transition: all 0.3s ease;
+        }
+
+        .pattern-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+            border-color: var(--rust-orange);
+        }
+
+        .pattern-header {
+            padding: 1rem 1.25rem;
+            background: linear-gradient(90deg, rgba(247, 76, 0, 0.15), transparent);
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .pattern-header .icon {
+            font-size: 1.5rem;
+        }
+
+        .pattern-header h4 {
+            margin: 0;
+            color: var(--text-primary);
+        }
+
+        .pattern-content {
+            padding: 1.25rem;
+        }
+
+        .pattern-content p {
+            margin-bottom: 1rem;
+        }
+
+        /* Code blocks */
+        pre {
+            background: var(--bg-dark);
+            border-radius: 8px;
+            padding: 1rem;
+            overflow-x: auto;
+            font-size: 0.85rem;
+            line-height: 1.5;
+            border: 1px solid var(--border-color);
+            margin: 1rem 0;
+        }
+
+        code {
+            font-family: 'Fira Code', 'Consolas', monospace;
+        }
+
+        .keyword { color: #ff7b72; }
+        .function { color: #d2a8ff; }
+        .string { color: #a5d6ff; }
+        .type { color: #7ee787; }
+        .comment { color: #8b949e; font-style: italic; }
+        .variable { color: #ffa657; }
+        .attribute { color: #79c0ff; }
+        .number { color: #79c0ff; }
+        .macro { color: #f0883e; }
+
+        /* Inline code */
+        p code, li code {
+            background: var(--bg-highlight);
+            padding: 0.2rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.9rem;
+        }
+
+        /* Animated Flow Diagram */
+        .animated-flow {
+            background: var(--bg-card);
+            border-radius: 16px;
+            padding: 2rem;
+            margin: 2rem 0;
+            border: 1px solid var(--border-color);
+            overflow-x: auto;
+        }
+
+        .flow-container {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.5rem;
+            min-width: 900px;
+            padding: 1rem 0;
+        }
+
+        .flow-node {
+            background: var(--bg-dark);
+            border: 2px solid var(--border-color);
+            border-radius: 12px;
+            padding: 1rem 1.25rem;
+            text-align: center;
+            min-width: 120px;
+            transition: all 0.3s ease;
+            position: relative;
+        }
+
+        .flow-node.frontend { border-color: var(--vue-green); }
+        .flow-node.bridge { border-color: var(--tauri-blue); }
+        .flow-node.backend { border-color: var(--rust-orange); }
+        .flow-node.data { border-color: #f1c40f; }
+        .flow-node.external { border-color: #9b59b6; }
+
+        .flow-node .title {
+            font-weight: 600;
+            font-size: 0.95rem;
+        }
+
+        .flow-node .tech {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            margin-top: 0.25rem;
+        }
+
+        .flow-connector {
+            color: var(--text-secondary);
+            font-size: 1.2rem;
+            flex-shrink: 0;
+        }
+
+        .flow-connector.animated {
+            animation: flowPulse 1.5s ease-in-out infinite;
+        }
+
+        @keyframes flowPulse {
+            0%, 100% { opacity: 0.3; transform: translateX(0); }
+            50% { opacity: 1; transform: translateX(3px); }
+        }
+
+        /* Tabs */
+        .tabs {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 0.5rem;
+        }
+
+        .tab {
+            padding: 0.5rem 1rem;
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            border-radius: 6px 6px 0 0;
+            transition: all 0.3s ease;
+            font-size: 0.95rem;
+        }
+
+        .tab:hover {
+            color: var(--text-primary);
+            background: var(--bg-highlight);
+        }
+
+        .tab.active {
+            color: var(--rust-orange);
+            background: var(--bg-highlight);
+            border-bottom: 2px solid var(--rust-orange);
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+            animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        /* Comparison Table */
+        .comparison-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 1.5rem 0;
+        }
+
+        .comparison-table th,
+        .comparison-table td {
+            padding: 1rem;
+            text-align: left;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .comparison-table th {
+            background: var(--bg-card);
+            color: var(--rust-orange);
+            font-weight: 600;
+        }
+
+        .comparison-table tr:hover td {
+            background: rgba(247, 76, 0, 0.05);
+        }
+
+        .comparison-table td:first-child {
+            color: var(--text-primary);
+            font-weight: 500;
+        }
+
+        /* Tips Box */
+        .tip-box {
+            background: linear-gradient(135deg, rgba(63, 185, 80, 0.1), rgba(63, 185, 80, 0.05));
+            border: 1px solid var(--success);
+            border-radius: 12px;
+            padding: 1.25rem;
+            margin: 1.5rem 0;
+        }
+
+        .tip-box.warning {
+            background: linear-gradient(135deg, rgba(210, 153, 34, 0.1), rgba(210, 153, 34, 0.05));
+            border-color: var(--warning);
+        }
+
+        .tip-box .title {
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .tip-box.warning .title { color: var(--warning); }
+        .tip-box .title { color: var(--success); }
+
+        /* Interactive Demo */
+        .demo-container {
+            background: var(--bg-card);
+            border-radius: 16px;
+            padding: 2rem;
+            margin: 2rem 0;
+            border: 1px solid var(--border-color);
+        }
+
+        .demo-controls {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+            flex-wrap: wrap;
+        }
+
+        .demo-btn {
+            background: linear-gradient(135deg, var(--rust-orange), #c43d00);
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 8px;
+            font-size: 0.95rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .demo-btn:hover {
+            transform: scale(1.05);
+            box-shadow: 0 5px 20px rgba(247, 76, 0, 0.4);
+        }
+
+        .demo-btn.secondary {
+            background: var(--bg-dark);
+            border: 1px solid var(--border-color);
+        }
+
+        .demo-btn.secondary:hover {
+            border-color: var(--rust-orange);
+            box-shadow: none;
+        }
+
+        .demo-output {
+            background: var(--bg-dark);
+            border-radius: 8px;
+            padding: 1.5rem;
+            min-height: 200px;
+            font-family: monospace;
+            font-size: 0.9rem;
+            line-height: 1.6;
+            overflow-x: auto;
+        }
+
+        .demo-step {
+            opacity: 0;
+            transform: translateX(-20px);
+            animation: stepIn 0.4s ease-out forwards;
+            margin: 0.25rem 0;
+        }
+
+        @keyframes stepIn {
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        /* Module Tree */
+        .module-tree {
+            background: var(--bg-dark);
+            border-radius: 12px;
+            padding: 1.5rem;
+            font-family: monospace;
+            border: 1px solid var(--border-color);
+        }
+
+        .module-tree .folder {
+            color: var(--tauri-blue);
+        }
+
+        .module-tree .file {
+            color: var(--text-secondary);
+        }
+
+        .module-tree .rust-file {
+            color: var(--rust-orange);
+        }
+
+        .module-tree .vue-file {
+            color: var(--vue-green);
+        }
+
+        .module-tree ul {
+            list-style: none;
+            padding-left: 1.5rem;
+        }
+
+        .module-tree > ul {
+            padding-left: 0;
+        }
+
+        .module-tree li {
+            padding: 0.25rem 0;
+            position: relative;
+        }
+
+        .module-tree li::before {
+            content: '';
+            position: absolute;
+            left: -1rem;
+            top: 0;
+            bottom: 0;
+            width: 1px;
+            background: var(--border-color);
+        }
+
+        .module-tree > ul > li::before {
+            display: none;
+        }
+
+        /* Checklist */
+        .checklist {
+            list-style: none;
+            padding: 0;
+        }
+
+        .checklist li {
+            padding: 0.75rem 0;
+            padding-left: 2rem;
+            position: relative;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .checklist li::before {
+            content: '✓';
+            position: absolute;
+            left: 0;
+            color: var(--success);
+            font-weight: bold;
+        }
+
+        /* Footer */
+        footer {
+            text-align: center;
+            padding: 2rem;
+            color: var(--text-secondary);
+            border-top: 1px solid var(--border-color);
+        }
+
+        footer a {
+            color: var(--rust-orange);
+            text-decoration: none;
+        }
+
+        /* Scroll indicator */
+        .scroll-indicator {
+            position: fixed;
+            top: 0;
+            left: 0;
+            height: 3px;
+            background: linear-gradient(90deg, var(--laravel-red), var(--rust-orange), var(--tauri-blue));
+            z-index: 1000;
+            transition: width 0.1s;
+        }
+    </style>
+</head>
+<body>
+    <div class="scroll-indicator" id="scrollIndicator"></div>
+
+    <header>
+        <h1>MVC to Rust Architecture</h1>
+        <p class="subtitle">From Laravel Patterns to Tauri/Rust - A Visual Guide</p>
+    </header>
+
+    <nav>
+        <ul>
+            <li><a href="#mvc-flow">MVC Flow</a></li>
+            <li><a href="#rust-flow">Rust Flow</a></li>
+            <li><a href="#patterns">Common Patterns</a></li>
+            <li><a href="#error-handling">Error Handling</a></li>
+            <li><a href="#state">State Management</a></li>
+            <li><a href="#async">Async Patterns</a></li>
+            <li><a href="#modules">Module System</a></li>
+            <li><a href="#interactive">Interactive</a></li>
+        </ul>
+    </nav>
+
+    <main>
+        <!-- MVC Flow Comparison -->
+        <section id="mvc-flow">
+            <h2>Laravel MVC vs Tauri/Rust Flow</h2>
+            <p>How the familiar Laravel request lifecycle maps to a Tauri desktop app</p>
+
+            <div class="flow-comparison">
+                <!-- Laravel Stack -->
+                <div class="flow-stack">
+                    <div class="flow-stack-title laravel">Laravel MVC Flow</div>
+
+                    <div class="flow-step" data-step="1">
+                        <div class="label">1. HTTP Request</div>
+                        <div class="file">Browser → web.php</div>
+                        <div class="desc">User clicks link or submits form</div>
+                    </div>
+
+                    <div class="flow-step" data-step="2">
+                        <div class="label">2. Route</div>
+                        <div class="file">routes/web.php</div>
+                        <div class="desc">Route::post('/notes', [NoteController::class, 'store'])</div>
+                    </div>
+
+                    <div class="flow-step" data-step="3">
+                        <div class="label">3. Middleware</div>
+                        <div class="file">app/Http/Middleware/</div>
+                        <div class="desc">Auth, CSRF, validation pipeline</div>
+                    </div>
+
+                    <div class="flow-step" data-step="4">
+                        <div class="label">4. Controller</div>
+                        <div class="file">app/Http/Controllers/NoteController.php</div>
+                        <div class="desc">Handle request, call services</div>
+                    </div>
+
+                    <div class="flow-step" data-step="5">
+                        <div class="label">5. Service Class</div>
+                        <div class="file">app/Services/NoteService.php</div>
+                        <div class="desc">Business logic layer</div>
+                    </div>
+
+                    <div class="flow-step" data-step="6">
+                        <div class="label">6. Model (Eloquent)</div>
+                        <div class="file">app/Models/Note.php</div>
+                        <div class="desc">Database interaction via ORM</div>
+                    </div>
+
+                    <div class="flow-step" data-step="7">
+                        <div class="label">7. View (Blade)</div>
+                        <div class="file">resources/views/notes/show.blade.php</div>
+                        <div class="desc">Render HTML response</div>
+                    </div>
+                </div>
+
+                <!-- Mapping Arrows -->
+                <div class="flow-arrows">
+                    <div class="mapping-arrow">
+                        <svg viewBox="0 0 40 24" fill="none" stroke-width="2">
+                            <path d="M0 12 L35 12 M30 6 L38 12 L30 18" />
+                        </svg>
+                    </div>
+                    <div class="mapping-arrow">
+                        <svg viewBox="0 0 40 24" fill="none" stroke-width="2">
+                            <path d="M0 12 L35 12 M30 6 L38 12 L30 18" />
+                        </svg>
+                    </div>
+                    <div class="mapping-arrow">
+                        <svg viewBox="0 0 40 24" fill="none" stroke-width="2">
+                            <path d="M0 12 L35 12 M30 6 L38 12 L30 18" />
+                        </svg>
+                    </div>
+                    <div class="mapping-arrow">
+                        <svg viewBox="0 0 40 24" fill="none" stroke-width="2">
+                            <path d="M0 12 L35 12 M30 6 L38 12 L30 18" />
+                        </svg>
+                    </div>
+                    <div class="mapping-arrow">
+                        <svg viewBox="0 0 40 24" fill="none" stroke-width="2">
+                            <path d="M0 12 L35 12 M30 6 L38 12 L30 18" />
+                        </svg>
+                    </div>
+                    <div class="mapping-arrow">
+                        <svg viewBox="0 0 40 24" fill="none" stroke-width="2">
+                            <path d="M0 12 L35 12 M30 6 L38 12 L30 18" />
+                        </svg>
+                    </div>
+                    <div class="mapping-arrow">
+                        <svg viewBox="0 0 40 24" fill="none" stroke-width="2">
+                            <path d="M0 12 L35 12 M30 6 L38 12 L30 18" />
+                        </svg>
+                    </div>
+                </div>
+
+                <!-- Rust Stack -->
+                <div class="flow-stack">
+                    <div class="flow-stack-title rust">Tauri/Rust Flow</div>
+
+                    <div class="flow-step" data-step="1">
+                        <div class="label">1. User Action</div>
+                        <div class="file">Vue Component (click, input)</div>
+                        <div class="desc">User interacts with desktop UI</div>
+                    </div>
+
+                    <div class="flow-step" data-step="2">
+                        <div class="label">2. Composable</div>
+                        <div class="file">src/composables/useNotes.ts</div>
+                        <div class="desc">invoke("create_note", { ... })</div>
+                    </div>
+
+                    <div class="flow-step" data-step="3">
+                        <div class="label">3. Tauri IPC</div>
+                        <div class="file">@tauri-apps/api</div>
+                        <div class="desc">Serializes call to Rust backend</div>
+                    </div>
+
+                    <div class="flow-step" data-step="4">
+                        <div class="label">4. Command Handler</div>
+                        <div class="file">src-tauri/src/commands/notes.rs</div>
+                        <div class="desc">#[tauri::command] async fn</div>
+                    </div>
+
+                    <div class="flow-step" data-step="5">
+                        <div class="label">5. Business Logic</div>
+                        <div class="file">(inline or separate module)</div>
+                        <div class="desc">Validation, transformations</div>
+                    </div>
+
+                    <div class="flow-step" data-step="6">
+                        <div class="label">6. Database (sqlx)</div>
+                        <div class="file">sqlx::query() + Structs</div>
+                        <div class="desc">Type-safe SQL queries</div>
+                    </div>
+
+                    <div class="flow-step" data-step="7">
+                        <div class="label">7. Vue Reactivity</div>
+                        <div class="file">ref(), reactive(), watch()</div>
+                        <div class="desc">UI updates automatically</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="tip-box">
+                <div class="title">💡 Key Insight</div>
+                <p>In Laravel, the server renders HTML. In Tauri, the Rust backend only returns <strong>data</strong> (JSON), and Vue handles all rendering on the client side. Think of it as building a Laravel API + Vue SPA, but packaged as a desktop app.</p>
+            </div>
+        </section>
+
+        <!-- Rust Flow Detail -->
+        <section id="rust-flow">
+            <h2>The Tauri Request Flow</h2>
+            <p>A detailed look at how data flows through the Jana app</p>
+
+            <div class="animated-flow">
+                <div class="flow-container">
+                    <div class="flow-node frontend">
+                        <div class="title">Vue Component</div>
+                        <div class="tech">Sidebar.vue</div>
+                    </div>
+                    <span class="flow-connector animated">→</span>
+                    <div class="flow-node frontend">
+                        <div class="title">Composable</div>
+                        <div class="tech">useNotes.ts</div>
+                    </div>
+                    <span class="flow-connector animated">→</span>
+                    <div class="flow-node bridge">
+                        <div class="title">IPC Bridge</div>
+                        <div class="tech">invoke()</div>
+                    </div>
+                    <span class="flow-connector animated">→</span>
+                    <div class="flow-node backend">
+                        <div class="title">Command</div>
+                        <div class="tech">notes.rs</div>
+                    </div>
+                    <span class="flow-connector animated">→</span>
+                    <div class="flow-node data">
+                        <div class="title">SQLite</div>
+                        <div class="tech">sqlx</div>
+                    </div>
+                </div>
+            </div>
+
+            <h3>Layer Responsibilities</h3>
+            <table class="comparison-table">
+                <thead>
+                    <tr>
+                        <th>Layer</th>
+                        <th>Laravel Equivalent</th>
+                        <th>Responsibility</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Vue Component</td>
+                        <td>Blade View + JS</td>
+                        <td>UI rendering, user event handling, local state</td>
+                    </tr>
+                    <tr>
+                        <td>Composable</td>
+                        <td>API Client / Repository</td>
+                        <td>Abstracts IPC calls, provides typed interface</td>
+                    </tr>
+                    <tr>
+                        <td>Tauri IPC</td>
+                        <td>HTTP Layer</td>
+                        <td>Serialization, routing to correct command</td>
+                    </tr>
+                    <tr>
+                        <td>Command Handler</td>
+                        <td>Controller</td>
+                        <td>Request handling, orchestrates operations</td>
+                    </tr>
+                    <tr>
+                        <td>sqlx Queries</td>
+                        <td>Eloquent Model</td>
+                        <td>Database operations, data mapping</td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+
+        <!-- Common Patterns -->
+        <section id="patterns">
+            <h2>Common Rust Patterns</h2>
+            <p>Essential patterns you'll use when building Rust applications</p>
+
+            <div class="pattern-grid">
+                <!-- Pattern 1: Structs -->
+                <div class="pattern-card">
+                    <div class="pattern-header">
+                        <span class="icon">📦</span>
+                        <h4>Structs (Like PHP Classes)</h4>
+                    </div>
+                    <div class="pattern-content">
+                        <p>Structs define data shapes. Unlike PHP classes, they don't have inheritance - use composition instead.</p>
+                        <pre><code><span class="comment">// Define a struct (like a PHP class with only properties)</span>
+<span class="attribute">#[derive(Debug, Clone, Serialize, Deserialize)]</span>
+<span class="keyword">pub struct</span> <span class="type">Note</span> {
+    <span class="keyword">pub</span> id: <span class="type">String</span>,
+    <span class="keyword">pub</span> title: <span class="type">Option</span>&lt;<span class="type">String</span>&gt;,  <span class="comment">// nullable</span>
+    <span class="keyword">pub</span> content: <span class="type">Option</span>&lt;<span class="type">String</span>&gt;,
+    <span class="keyword">pub</span> created_at: <span class="type">i64</span>,
+}
+
+<span class="comment">// Add methods with impl block</span>
+<span class="keyword">impl</span> <span class="type">Note</span> {
+    <span class="keyword">pub fn</span> <span class="function">is_empty</span>(&<span class="keyword">self</span>) -> <span class="type">bool</span> {
+        <span class="keyword">self</span>.content.<span class="function">is_none</span>()
+    }
+}</code></pre>
+                    </div>
+                </div>
+
+                <!-- Pattern 2: Option -->
+                <div class="pattern-card">
+                    <div class="pattern-header">
+                        <span class="icon">❓</span>
+                        <h4>Option&lt;T&gt; (Nullable Values)</h4>
+                    </div>
+                    <div class="pattern-content">
+                        <p>Rust has no null. <code>Option&lt;T&gt;</code> explicitly represents "might have a value".</p>
+                        <pre><code><span class="comment">// PHP: $title = $note->title ?? 'Untitled';</span>
+
+<span class="comment">// Rust: Pattern matching</span>
+<span class="keyword">let</span> display_title = <span class="keyword">match</span> &note.title {
+    <span class="type">Some</span>(t) => t.<span class="function">clone</span>(),
+    <span class="type">None</span> => <span class="string">"Untitled"</span>.<span class="function">to_string</span>(),
+};
+
+<span class="comment">// Shorthand with unwrap_or</span>
+<span class="keyword">let</span> title = note.title.<span class="function">unwrap_or</span>(<span class="string">"Untitled"</span>.<span class="function">to_string</span>());
+
+<span class="comment">// Safe chaining (like PHP's ?->)</span>
+<span class="keyword">let</span> len = note.title.<span class="function">as_ref</span>().<span class="function">map</span>(|t| t.<span class="function">len</span>());</code></pre>
+                    </div>
+                </div>
+
+                <!-- Pattern 3: Result -->
+                <div class="pattern-card">
+                    <div class="pattern-header">
+                        <span class="icon">⚡</span>
+                        <h4>Result&lt;T, E&gt; (Error Handling)</h4>
+                    </div>
+                    <div class="pattern-content">
+                        <p>No exceptions! Functions return <code>Result</code> to indicate success or failure.</p>
+                        <pre><code><span class="comment">// PHP: try { ... } catch (Exception $e) { ... }</span>
+
+<span class="comment">// Rust: Result type</span>
+<span class="keyword">fn</span> <span class="function">get_note</span>(id: <span class="type">String</span>) -> <span class="type">Result</span>&lt;<span class="type">Note</span>, <span class="type">String</span>&gt; {
+    <span class="comment">// ? operator: return early if error</span>
+    <span class="keyword">let</span> note = <span class="function">db_query</span>(&id).<span class="keyword">await</span>
+        .<span class="function">map_err</span>(|e| e.<span class="function">to_string</span>())?;
+
+    <span class="type">Ok</span>(note)  <span class="comment">// Explicit success</span>
+}
+
+<span class="comment">// Caller handles both cases</span>
+<span class="keyword">match</span> <span class="function">get_note</span>(id).<span class="keyword">await</span> {
+    <span class="type">Ok</span>(note) => <span class="comment">/* use note */</span>,
+    <span class="type">Err</span>(e) => <span class="comment">/* handle error */</span>,
+}</code></pre>
+                    </div>
+                </div>
+
+                <!-- Pattern 4: Derive Macros -->
+                <div class="pattern-card">
+                    <div class="pattern-header">
+                        <span class="icon">🔧</span>
+                        <h4>Derive Macros (Auto-Implementation)</h4>
+                    </div>
+                    <div class="pattern-content">
+                        <p>Automatically implement common traits (like PHP interfaces) for your types.</p>
+                        <pre><code><span class="attribute">#[derive(
+    Debug,       </span><span class="comment">// println!("{:?}", note)</span><span class="attribute">
+    Clone,       </span><span class="comment">// note.clone()</span><span class="attribute">
+    Serialize,   </span><span class="comment">// Convert to JSON</span><span class="attribute">
+    Deserialize, </span><span class="comment">// Parse from JSON</span><span class="attribute">
+    PartialEq,   </span><span class="comment">// note1 == note2</span><span class="attribute">
+)]</span>
+<span class="keyword">pub struct</span> <span class="type">Note</span> {
+    <span class="comment">// fields...</span>
+}
+
+<span class="comment">// Now you can:</span>
+<span class="keyword">let</span> json = <span class="function">serde_json::to_string</span>(&note)?;
+<span class="keyword">let</span> copy = note.<span class="function">clone</span>();
+<span class="macro">println!</span>(<span class="string">"{:?}"</span>, note);</code></pre>
+                    </div>
+                </div>
+
+                <!-- Pattern 5: Ownership -->
+                <div class="pattern-card">
+                    <div class="pattern-header">
+                        <span class="icon">🔐</span>
+                        <h4>Ownership & Borrowing</h4>
+                    </div>
+                    <div class="pattern-content">
+                        <p>Rust's killer feature - memory safety without garbage collection.</p>
+                        <pre><code><span class="comment">// MOVE: ownership transfers</span>
+<span class="keyword">let</span> s1 = <span class="type">String</span>::<span class="function">from</span>(<span class="string">"hello"</span>);
+<span class="keyword">let</span> s2 = s1;  <span class="comment">// s1 is now invalid!</span>
+
+<span class="comment">// BORROW: temporary access with &</span>
+<span class="keyword">fn</span> <span class="function">print_note</span>(note: &<span class="type">Note</span>) {  <span class="comment">// borrows, doesn't own</span>
+    <span class="macro">println!</span>(<span class="string">"{}"</span>, note.id);
+}  <span class="comment">// note still valid after call</span>
+
+<span class="comment">// MUTABLE BORROW: exclusive write access</span>
+<span class="keyword">fn</span> <span class="function">update_note</span>(note: &<span class="keyword">mut</span> <span class="type">Note</span>) {
+    note.title = <span class="type">Some</span>(<span class="string">"New Title"</span>.<span class="function">to_string</span>());
+}
+
+<span class="comment">// CLONE: explicit copy when needed</span>
+<span class="keyword">let</span> copy = note.<span class="function">clone</span>();</code></pre>
+                    </div>
+                </div>
+
+                <!-- Pattern 6: Pattern Matching -->
+                <div class="pattern-card">
+                    <div class="pattern-header">
+                        <span class="icon">🎯</span>
+                        <h4>Pattern Matching</h4>
+                    </div>
+                    <div class="pattern-content">
+                        <p>Powerful switch-like syntax that ensures all cases are handled.</p>
+                        <pre><code><span class="comment">// PHP: switch($status) { case 'draft': ... }</span>
+
+<span class="comment">// Rust: exhaustive matching</span>
+<span class="keyword">enum</span> <span class="type">Status</span> { Draft, Published, Archived }
+
+<span class="keyword">let</span> message = <span class="keyword">match</span> status {
+    <span class="type">Status</span>::Draft => <span class="string">"Not yet published"</span>,
+    <span class="type">Status</span>::Published => <span class="string">"Live!"</span>,
+    <span class="type">Status</span>::Archived => <span class="string">"No longer available"</span>,
+};  <span class="comment">// Must handle ALL variants!</span>
+
+<span class="comment">// Destructuring in match</span>
+<span class="keyword">match</span> result {
+    <span class="type">Ok</span>(note) => <span class="macro">println!</span>(<span class="string">"Got: {}"</span>, note.id),
+    <span class="type">Err</span>(e) => <span class="macro">eprintln!</span>(<span class="string">"Error: {}"</span>, e),
+}
+
+<span class="comment">// if let for single pattern</span>
+<span class="keyword">if let</span> <span class="type">Some</span>(title) = note.title {
+    <span class="macro">println!</span>(<span class="string">"Title: {}"</span>, title);
+}</code></pre>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Error Handling -->
+        <section id="error-handling">
+            <h2>Error Handling Patterns</h2>
+            <p>How to handle errors gracefully in Rust vs PHP</p>
+
+            <div class="tabs">
+                <button class="tab active" onclick="showTab(event, 'error-php')">PHP/Laravel</button>
+                <button class="tab" onclick="showTab(event, 'error-rust')">Rust</button>
+                <button class="tab" onclick="showTab(event, 'error-tauri')">Tauri Commands</button>
+            </div>
+
+            <div id="error-php" class="tab-content active">
+                <pre><code><span class="comment">// Laravel: Exceptions bubble up</span>
+<span class="keyword">class</span> <span class="type">NoteController</span>
+{
+    <span class="keyword">public function</span> <span class="function">show</span>(<span class="variable">$id</span>)
+    {
+        <span class="keyword">try</span> {
+            <span class="variable">$note</span> = <span class="type">Note</span>::<span class="function">findOrFail</span>(<span class="variable">$id</span>);
+            <span class="keyword">return</span> <span class="function">view</span>(<span class="string">'notes.show'</span>, <span class="function">compact</span>(<span class="string">'note'</span>));
+        } <span class="keyword">catch</span> (<span class="type">ModelNotFoundException</span> <span class="variable">$e</span>) {
+            <span class="keyword">return</span> <span class="function">response</span>()-><span class="function">json</span>([<span class="string">'error'</span> => <span class="string">'Not found'</span>], <span class="number">404</span>);
+        } <span class="keyword">catch</span> (<span class="type">\Exception</span> <span class="variable">$e</span>) {
+            <span class="function">report</span>(<span class="variable">$e</span>);
+            <span class="keyword">return</span> <span class="function">response</span>()-><span class="function">json</span>([<span class="string">'error'</span> => <span class="string">'Server error'</span>], <span class="number">500</span>);
+        }
+    }
+}</code></pre>
+            </div>
+
+            <div id="error-rust" class="tab-content">
+                <pre><code><span class="comment">// Rust: Explicit error handling with Result</span>
+
+<span class="comment">// Define custom error type (optional but recommended)</span>
+<span class="attribute">#[derive(Debug)]</span>
+<span class="keyword">enum</span> <span class="type">AppError</span> {
+    NotFound(<span class="type">String</span>),
+    Database(<span class="type">String</span>),
+    Validation(<span class="type">String</span>),
+}
+
+<span class="keyword">fn</span> <span class="function">get_note</span>(id: &<span class="keyword">str</span>) -> <span class="type">Result</span>&lt;<span class="type">Note</span>, <span class="type">AppError</span>&gt; {
+    <span class="comment">// Early return on error with ?</span>
+    <span class="keyword">let</span> note = <span class="function">db_find</span>(id)
+        .<span class="function">map_err</span>(|e| <span class="type">AppError</span>::Database(e.<span class="function">to_string</span>()))?;
+
+    <span class="keyword">match</span> note {
+        <span class="type">Some</span>(n) => <span class="type">Ok</span>(n),
+        <span class="type">None</span> => <span class="type">Err</span>(<span class="type">AppError</span>::NotFound(<span class="function">format!</span>(<span class="string">"Note {} not found"</span>, id))),
+    }
+}
+
+<span class="comment">// Using the function</span>
+<span class="keyword">let</span> result = <span class="function">get_note</span>(<span class="string">"abc123"</span>);
+<span class="keyword">match</span> result {
+    <span class="type">Ok</span>(note) => <span class="macro">println!</span>(<span class="string">"Found: {:?}"</span>, note),
+    <span class="type">Err</span>(<span class="type">AppError</span>::NotFound(msg)) => <span class="macro">println!</span>(<span class="string">"404: {}"</span>, msg),
+    <span class="type">Err</span>(<span class="type">AppError</span>::Database(msg)) => <span class="macro">println!</span>(<span class="string">"DB Error: {}"</span>, msg),
+    <span class="type">Err</span>(_) => <span class="macro">println!</span>(<span class="string">"Unknown error"</span>),
+}</code></pre>
+            </div>
+
+            <div id="error-tauri" class="tab-content">
+                <pre><code><span class="comment">// Tauri Commands: Return Result&lt;T, String&gt;</span>
+
+<span class="attribute">#[tauri::command]</span>
+<span class="keyword">pub async fn</span> <span class="function">get_note</span>(
+    id: <span class="type">String</span>,
+    state: <span class="type">State</span>&lt;'_, <span class="type">DbState</span>&gt;
+) -> <span class="type">Result</span>&lt;<span class="type">Note</span>, <span class="type">String</span>&gt; {
+    <span class="comment">// map_err converts any error to String for frontend</span>
+    <span class="keyword">let</span> note = <span class="function">sqlx::query_as</span>::&lt;_, <span class="type">Note</span>&gt;(
+        <span class="string">"SELECT * FROM notes WHERE id = ?"</span>
+    )
+    .<span class="function">bind</span>(&id)
+    .<span class="function">fetch_optional</span>(&state.pool)
+    .<span class="keyword">await</span>
+    .<span class="function">map_err</span>(|e| <span class="function">format!</span>(<span class="string">"Database error: {}"</span>, e))?;
+
+    note.<span class="function">ok_or_else</span>(|| <span class="function">format!</span>(<span class="string">"Note not found: {}"</span>, id))
+}
+
+<span class="comment">// Frontend catches errors:</span>
+<span class="comment">// try {</span>
+<span class="comment">//   const note = await invoke("get_note", { id });</span>
+<span class="comment">// } catch (error) {</span>
+<span class="comment">//   console.error(error); // "Note not found: abc123"</span>
+<span class="comment">// }</span></code></pre>
+            </div>
+
+            <div class="tip-box warning">
+                <div class="title">⚠️ Common Mistake</div>
+                <p>Don't use <code>.unwrap()</code> or <code>.expect()</code> in production code - they panic (crash) on error. Always use <code>?</code> or <code>match</code> to handle errors properly. Reserve <code>.unwrap()</code> for tests and prototyping only.</p>
+            </div>
+        </section>
+
+        <!-- State Management -->
+        <section id="state">
+            <h2>State Management</h2>
+            <p>Managing shared state between components</p>
+
+            <h3>Laravel vs Tauri State</h3>
+            <div class="pattern-grid">
+                <div class="pattern-card">
+                    <div class="pattern-header">
+                        <span class="icon">🔴</span>
+                        <h4>Laravel (Service Container)</h4>
+                    </div>
+                    <div class="pattern-content">
+                        <pre><code><span class="comment">// Service Provider</span>
+<span class="keyword">public function</span> <span class="function">register</span>()
+{
+    <span class="variable">$this</span>->app-><span class="function">singleton</span>(
+        <span class="type">NoteService</span>::<span class="keyword">class</span>,
+        <span class="keyword">fn</span>() => <span class="keyword">new</span> <span class="type">NoteService</span>(<span class="function">config</span>(<span class="string">'notes'</span>))
+    );
+}
+
+<span class="comment">// Controller - injected automatically</span>
+<span class="keyword">public function</span> <span class="function">__construct</span>(
+    <span class="keyword">private</span> <span class="type">NoteService</span> <span class="variable">$notes</span>
+) {}</code></pre>
+                    </div>
+                </div>
+
+                <div class="pattern-card">
+                    <div class="pattern-header">
+                        <span class="icon">🦀</span>
+                        <h4>Tauri (Managed State)</h4>
+                    </div>
+                    <div class="pattern-content">
+                        <pre><code><span class="comment">// Define state wrapper</span>
+<span class="keyword">pub struct</span> <span class="type">DbState</span> {
+    <span class="keyword">pub</span> pool: <span class="type">SqlitePool</span>,
+}
+
+<span class="comment">// Register in main.rs</span>
+<span class="function">tauri::Builder::default</span>()
+    .<span class="function">manage</span>(<span class="type">DbState</span> { pool })  <span class="comment">// Add state</span>
+    .<span class="function">invoke_handler</span>(...)
+    .<span class="function">run</span>(...);
+
+<span class="comment">// Access in commands</span>
+<span class="attribute">#[tauri::command]</span>
+<span class="keyword">pub async fn</span> <span class="function">get_note</span>(
+    state: <span class="type">State</span>&lt;'_, <span class="type">DbState</span>&gt;  <span class="comment">// Injected!</span>
+) -> <span class="type">Result</span>&lt;<span class="type">Note</span>, <span class="type">String</span>&gt; {
+    <span class="comment">// Use state.pool</span>
+}</code></pre>
+                    </div>
+                </div>
+            </div>
+
+            <h3>Frontend State (Vue 3)</h3>
+            <pre><code><span class="comment">// Composable pattern - like Laravel Service classes but reactive</span>
+<span class="comment">// src/composables/useNotes.ts</span>
+
+<span class="keyword">import</span> { ref, readonly } <span class="keyword">from</span> <span class="string">'vue'</span>;
+<span class="keyword">import</span> { invoke } <span class="keyword">from</span> <span class="string">'@tauri-apps/api/core'</span>;
+
+<span class="comment">// Private state</span>
+<span class="keyword">const</span> notes = <span class="function">ref</span>&lt;<span class="type">Note</span>[]&gt;([]);
+<span class="keyword">const</span> loading = <span class="function">ref</span>(<span class="keyword">false</span>);
+
+<span class="comment">// Export readonly to prevent external mutation</span>
+<span class="keyword">export function</span> <span class="function">useNotes</span>() {
+    <span class="keyword">async function</span> <span class="function">fetchNotes</span>() {
+        loading.value = <span class="keyword">true</span>;
+        notes.value = <span class="keyword">await</span> <span class="function">invoke</span>&lt;<span class="type">Note</span>[]&gt;(<span class="string">'list_notes'</span>);
+        loading.value = <span class="keyword">false</span>;
+    }
+
+    <span class="keyword">return</span> {
+        notes: <span class="function">readonly</span>(notes),
+        loading: <span class="function">readonly</span>(loading),
+        fetchNotes,
+    };
+}</code></pre>
+        </section>
+
+        <!-- Async Patterns -->
+        <section id="async">
+            <h2>Async Patterns</h2>
+            <p>How async/await works in Rust vs PHP</p>
+
+            <div class="tabs">
+                <button class="tab active" onclick="showTab(event, 'async-compare')">Comparison</button>
+                <button class="tab" onclick="showTab(event, 'async-concurrent')">Concurrent Execution</button>
+                <button class="tab" onclick="showTab(event, 'async-tokio')">Tokio Runtime</button>
+            </div>
+
+            <div id="async-compare" class="tab-content active">
+                <table class="comparison-table">
+                    <thead>
+                        <tr>
+                            <th>Concept</th>
+                            <th>PHP/Laravel</th>
+                            <th>Rust</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>Default behavior</td>
+                            <td>Synchronous (blocking)</td>
+                            <td>Async by choice (non-blocking)</td>
+                        </tr>
+                        <tr>
+                            <td>Async syntax</td>
+                            <td>Queues, Promises (JS)</td>
+                            <td><code>async fn</code> + <code>.await</code></td>
+                        </tr>
+                        <tr>
+                            <td>Runtime</td>
+                            <td>PHP-FPM process per request</td>
+                            <td>Tokio (multi-threaded executor)</td>
+                        </tr>
+                        <tr>
+                            <td>Parallelism</td>
+                            <td>Multiple processes</td>
+                            <td>Tasks on thread pool</td>
+                        </tr>
+                        <tr>
+                            <td>Background jobs</td>
+                            <td>Queue workers (Redis, DB)</td>
+                            <td><code>tokio::spawn()</code></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div id="async-concurrent" class="tab-content">
+                <pre><code><span class="comment">// Running multiple async operations concurrently</span>
+
+<span class="keyword">use</span> tokio::<span class="function">join!</span>;
+
+<span class="keyword">async fn</span> <span class="function">load_dashboard</span>() -> <span class="type">Result</span>&lt;<span class="type">Dashboard</span>, <span class="type">Error</span>&gt; {
+    <span class="comment">// Sequential (like PHP) - slow</span>
+    <span class="keyword">let</span> notes = <span class="function">get_notes</span>().<span class="keyword">await</span>?;
+    <span class="keyword">let</span> settings = <span class="function">get_settings</span>().<span class="keyword">await</span>?;
+    <span class="keyword">let</span> stats = <span class="function">get_stats</span>().<span class="keyword">await</span>?;
+
+    <span class="comment">// Concurrent (all at once) - fast!</span>
+    <span class="keyword">let</span> (notes, settings, stats) = <span class="macro">join!</span>(
+        <span class="function">get_notes</span>(),
+        <span class="function">get_settings</span>(),
+        <span class="function">get_stats</span>()
+    );
+
+    <span class="type">Ok</span>(<span class="type">Dashboard</span> {
+        notes: notes?,
+        settings: settings?,
+        stats: stats?,
+    })
+}
+
+<span class="comment">// Background task (like Laravel queue dispatch)</span>
+<span class="function">tokio::spawn</span>(<span class="keyword">async move</span> {
+    <span class="function">send_email</span>(user_id).<span class="keyword">await</span>;
+});  <span class="comment">// Returns immediately, runs in background</span></code></pre>
+            </div>
+
+            <div id="async-tokio" class="tab-content">
+                <pre><code><span class="comment">// Tokio is the async runtime (like PHP-FPM but for async)</span>
+
+<span class="comment">// In main.rs - Tauri handles this for you</span>
+<span class="attribute">#[tokio::main]</span>  <span class="comment">// Sets up the runtime</span>
+<span class="keyword">async fn</span> <span class="function">main</span>() {
+    <span class="function">tauri::Builder::default</span>()
+        .<span class="function">run</span>(...)
+        .<span class="function">expect</span>(<span class="string">"error running app"</span>);
+}
+
+<span class="comment">// Key Tokio features:</span>
+
+<span class="comment">// 1. Sleep (non-blocking delay)</span>
+<span class="function">tokio::time::sleep</span>(<span class="type">Duration</span>::<span class="function">from_secs</span>(<span class="number">5</span>)).<span class="keyword">await</span>;
+
+<span class="comment">// 2. Timeout (like PHP max_execution_time)</span>
+<span class="keyword">let</span> result = <span class="function">tokio::time::timeout</span>(
+    <span class="type">Duration</span>::<span class="function">from_secs</span>(<span class="number">30</span>),
+    <span class="function">long_operation</span>()
+).<span class="keyword">await</span>;
+
+<span class="comment">// 3. Select (race multiple futures)</span>
+<span class="macro">tokio::select!</span> {
+    result = <span class="function">operation_a</span>() => <span class="comment">/* a finished first */</span>,
+    result = <span class="function">operation_b</span>() => <span class="comment">/* b finished first */</span>,
+}</code></pre>
+            </div>
+        </section>
+
+        <!-- Module System -->
+        <section id="modules">
+            <h2>Rust Module System</h2>
+            <p>How to organize code in Rust (like Laravel's app/ folder)</p>
+
+            <h3>Jana Project Structure</h3>
+            <div class="module-tree">
+                <ul>
+                    <li><span class="folder">src-tauri/</span>
+                        <ul>
+                            <li><span class="folder">src/</span>
+                                <ul>
+                                    <li><span class="rust-file">main.rs</span> - Entry point, registers commands</li>
+                                    <li><span class="rust-file">db.rs</span> - Database setup & migrations</li>
+                                    <li><span class="folder">commands/</span>
+                                        <ul>
+                                            <li><span class="rust-file">mod.rs</span> - Module declaration</li>
+                                            <li><span class="rust-file">notes.rs</span> - Note CRUD commands</li>
+                                            <li><span class="rust-file">llm.rs</span> - AI summarization</li>
+                                            <li><span class="rust-file">settings.rs</span> - Settings commands</li>
+                                        </ul>
+                                    </li>
+                                </ul>
+                            </li>
+                            <li><span class="file">Cargo.toml</span> - Dependencies (like composer.json)</li>
+                            <li><span class="file">tauri.conf.json</span> - App configuration</li>
+                        </ul>
+                    </li>
+                    <li><span class="folder">src/</span> (Frontend)
+                        <ul>
+                            <li><span class="vue-file">App.vue</span></li>
+                            <li><span class="folder">components/</span></li>
+                            <li><span class="folder">composables/</span></li>
+                        </ul>
+                    </li>
+                </ul>
+            </div>
+
+            <h3>Module Declaration</h3>
+            <pre><code><span class="comment">// src-tauri/src/main.rs</span>
+<span class="keyword">mod</span> db;        <span class="comment">// Loads db.rs</span>
+<span class="keyword">mod</span> commands;  <span class="comment">// Loads commands/mod.rs</span>
+
+<span class="comment">// src-tauri/src/commands/mod.rs</span>
+<span class="keyword">pub mod</span> notes;     <span class="comment">// Loads commands/notes.rs</span>
+<span class="keyword">pub mod</span> llm;       <span class="comment">// Loads commands/llm.rs</span>
+<span class="keyword">pub mod</span> settings;  <span class="comment">// Loads commands/settings.rs</span>
+
+<span class="comment">// Using in main.rs</span>
+<span class="keyword">use</span> crate::commands::notes::create_note;
+<span class="keyword">use</span> crate::db::{init, <span class="type">DbState</span>};</code></pre>
+
+            <h3>Visibility (pub)</h3>
+            <pre><code><span class="comment">// Private by default (unlike PHP which is public)</span>
+<span class="keyword">struct</span> <span class="type">PrivateStruct</span>;  <span class="comment">// Only visible in this file</span>
+
+<span class="comment">// Public - visible everywhere</span>
+<span class="keyword">pub struct</span> <span class="type">PublicStruct</span>;
+
+<span class="comment">// Pub(crate) - visible within this crate only</span>
+<span class="keyword">pub</span>(<span class="keyword">crate</span>) <span class="keyword">struct</span> <span class="type">InternalStruct</span>;
+
+<span class="comment">// Pub fields</span>
+<span class="keyword">pub struct</span> <span class="type">Note</span> {
+    <span class="keyword">pub</span> id: <span class="type">String</span>,         <span class="comment">// Accessible from outside</span>
+    <span class="keyword">pub</span>(<span class="keyword">crate</span>) secret: <span class="type">i32</span>,  <span class="comment">// Internal only</span>
+    internal: <span class="type">bool</span>,          <span class="comment">// Private to this module</span>
+}</code></pre>
+        </section>
+
+        <!-- Interactive Demo -->
+        <section id="interactive">
+            <h2>Interactive: Trace the Flow</h2>
+            <p>Watch how a request flows through the application</p>
+
+            <div class="demo-container">
+                <div class="demo-controls">
+                    <button class="demo-btn" onclick="traceFullFlow()">Trace Full Flow</button>
+                    <button class="demo-btn" onclick="traceErrorFlow()">Trace Error Flow</button>
+                    <button class="demo-btn secondary" onclick="clearTrace()">Clear</button>
+                </div>
+                <div class="demo-output" id="traceOutput">
+                    <span style="color: var(--text-secondary);">Click a button to trace the request flow...</span>
+                </div>
+            </div>
+
+            <h3>Quick Reference: Laravel → Rust</h3>
+            <table class="comparison-table">
+                <thead>
+                    <tr>
+                        <th>Laravel Concept</th>
+                        <th>Rust Equivalent</th>
+                        <th>Example</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>$request->input('name')</td>
+                        <td>Function parameter</td>
+                        <td><code>fn handler(name: String)</code></td>
+                    </tr>
+                    <tr>
+                        <td>$model->save()</td>
+                        <td>sqlx::query().execute()</td>
+                        <td><code>sqlx::query("INSERT...").execute(&pool).await</code></td>
+                    </tr>
+                    <tr>
+                        <td>Model::find($id)</td>
+                        <td>sqlx::query_as().fetch_optional()</td>
+                        <td><code>query_as::<_, Note>("SELECT...").fetch_optional()</code></td>
+                    </tr>
+                    <tr>
+                        <td>throw new Exception()</td>
+                        <td>return Err()</td>
+                        <td><code>return Err("Not found".to_string())</code></td>
+                    </tr>
+                    <tr>
+                        <td>response()->json()</td>
+                        <td>return Ok()</td>
+                        <td><code>Ok(note)</code> (auto-serialized)</td>
+                    </tr>
+                    <tr>
+                        <td>collect($items)->map()</td>
+                        <td>.iter().map()</td>
+                        <td><code>items.iter().map(|x| x * 2).collect()</code></td>
+                    </tr>
+                    <tr>
+                        <td>$value ?? 'default'</td>
+                        <td>.unwrap_or()</td>
+                        <td><code>option.unwrap_or("default".to_string())</code></td>
+                    </tr>
+                    <tr>
+                        <td>optional($obj)->method()</td>
+                        <td>.map() or if let</td>
+                        <td><code>option.map(|o| o.method())</code></td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <div class="tip-box">
+                <div class="title">🎓 Learning Path</div>
+                <ul class="checklist">
+                    <li>Understand ownership and borrowing (& and &mut)</li>
+                    <li>Get comfortable with Result and Option types</li>
+                    <li>Learn pattern matching with match and if let</li>
+                    <li>Practice with structs and impl blocks</li>
+                    <li>Understand async/await with Tokio</li>
+                    <li>Explore error handling patterns</li>
+                </ul>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <p>Jana App - MVC to Rust Tutorial | <a href="rust-tutorial.html">← Back to Rust Features</a></p>
+    </footer>
+
+    <script>
+        // Scroll indicator
+        window.addEventListener('scroll', () => {
+            const indicator = document.getElementById('scrollIndicator');
+            const scrollTop = document.documentElement.scrollTop;
+            const scrollHeight = document.documentElement.scrollHeight - window.innerHeight;
+            const progress = (scrollTop / scrollHeight) * 100;
+            indicator.style.width = progress + '%';
+        });
+
+        // Section visibility on scroll
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    entry.target.classList.add('visible');
+                }
+            });
+        }, { threshold: 0.1 });
+
+        document.querySelectorAll('section').forEach(section => {
+            observer.observe(section);
+        });
+
+        // Tabs
+        function showTab(event, tabId) {
+            const container = event.target.closest('section');
+            container.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            container.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            event.target.classList.add('active');
+            document.getElementById(tabId).classList.add('active');
+        }
+
+        // Flow step highlighting
+        document.querySelectorAll('.flow-step').forEach(step => {
+            step.addEventListener('mouseenter', () => {
+                const stepNum = step.dataset.step;
+                document.querySelectorAll(`.flow-step[data-step="${stepNum}"]`).forEach(s => {
+                    s.classList.add('active');
+                });
+            });
+            step.addEventListener('mouseleave', () => {
+                document.querySelectorAll('.flow-step').forEach(s => {
+                    s.classList.remove('active');
+                });
+            });
+        });
+
+        // Trace demos
+        let stepDelay = 350;
+
+        function clearTrace() {
+            document.getElementById('traceOutput').innerHTML =
+                '<span style="color: var(--text-secondary);">Click a button to trace the request flow...</span>';
+        }
+
+        function addTraceStep(text, color, indent = 0) {
+            return new Promise(resolve => {
+                setTimeout(() => {
+                    const output = document.getElementById('traceOutput');
+                    const step = document.createElement('div');
+                    step.className = 'demo-step';
+                    step.style.color = color;
+                    step.style.paddingLeft = (indent * 20) + 'px';
+                    step.textContent = text;
+                    output.appendChild(step);
+                    resolve();
+                }, stepDelay);
+            });
+        }
+
+        async function traceFullFlow() {
+            const output = document.getElementById('traceOutput');
+            output.innerHTML = '';
+
+            await addTraceStep('═══════════════════════════════════════════════════════════', 'var(--border-color)', 0);
+            await addTraceStep('  TRACING: Create Note Flow', 'var(--text-primary)', 0);
+            await addTraceStep('═══════════════════════════════════════════════════════════', 'var(--border-color)', 0);
+            await addTraceStep('', 'var(--text-primary)', 0);
+
+            await addTraceStep('▸ FRONTEND LAYER (Vue)', 'var(--vue-green)', 0);
+            await addTraceStep('│', 'var(--border-color)', 0);
+            await addTraceStep('├─ [Sidebar.vue] User clicks "+" button', 'var(--text-secondary)', 0);
+            await addTraceStep('├─ [Sidebar.vue] handleNewNote() called', 'var(--text-secondary)', 0);
+            await addTraceStep('│   └─ await createNote()', 'var(--text-secondary)', 0);
+            await addTraceStep('│', 'var(--border-color)', 0);
+            await addTraceStep('├─ [useNotes.ts] createNote() composable', 'var(--text-secondary)', 0);
+            await addTraceStep('│   └─ invoke<Note>("create_note")', 'var(--tauri-blue)', 0);
+            await addTraceStep('│', 'var(--border-color)', 0);
+
+            await addTraceStep('▸ IPC BRIDGE (Tauri)', 'var(--tauri-blue)', 0);
+            await addTraceStep('│', 'var(--border-color)', 0);
+            await addTraceStep('├─ Serialize call to JSON', 'var(--text-secondary)', 0);
+            await addTraceStep('├─ Route to registered command', 'var(--text-secondary)', 0);
+            await addTraceStep('│   └─ main.rs: .invoke_handler(create_note)', 'var(--text-secondary)', 0);
+            await addTraceStep('│', 'var(--border-color)', 0);
+
+            await addTraceStep('▸ BACKEND LAYER (Rust)', 'var(--rust-orange)', 0);
+            await addTraceStep('│', 'var(--border-color)', 0);
+            await addTraceStep('├─ [commands/notes.rs] create_note() handler', 'var(--text-secondary)', 0);
+            await addTraceStep('│   ├─ State<DbState> injected by Tauri', 'var(--text-secondary)', 0);
+            await addTraceStep('│   ├─ let id = Uuid::new_v4().to_string()', 'var(--text-secondary)', 0);
+            await addTraceStep('│   │   └─ "a1b2c3d4-e5f6-7890-abcd-ef1234567890"', '#79c0ff', 0);
+            await addTraceStep('│   ├─ let now = chrono::Utc::now().timestamp()', 'var(--text-secondary)', 0);
+            await addTraceStep('│   │   └─ 1706745600', '#79c0ff', 0);
+            await addTraceStep('│   └─ Note { id, title: None, content: None, ... }', 'var(--text-secondary)', 0);
+            await addTraceStep('│', 'var(--border-color)', 0);
+
+            await addTraceStep('▸ DATABASE LAYER (SQLite)', '#f1c40f', 0);
+            await addTraceStep('│', 'var(--border-color)', 0);
+            await addTraceStep('├─ sqlx::query("INSERT INTO notes ...")', 'var(--text-secondary)', 0);
+            await addTraceStep('│   ├─ .bind(&note.id)', 'var(--text-secondary)', 0);
+            await addTraceStep('│   ├─ .bind(&note.title)  // None → NULL', 'var(--text-secondary)', 0);
+            await addTraceStep('│   ├─ .execute(&state.pool).await', 'var(--text-secondary)', 0);
+            await addTraceStep('│   └─ .map_err(|e| e.to_string())?', 'var(--text-secondary)', 0);
+            await addTraceStep('├─ Query executed successfully ✓', 'var(--success)', 0);
+            await addTraceStep('│', 'var(--border-color)', 0);
+
+            await addTraceStep('▸ RESPONSE FLOW', 'var(--tauri-blue)', 0);
+            await addTraceStep('│', 'var(--border-color)', 0);
+            await addTraceStep('├─ [notes.rs] Ok(note) returned', 'var(--rust-orange)', 0);
+            await addTraceStep('├─ [Tauri IPC] Serialize Note to JSON', 'var(--tauri-blue)', 0);
+            await addTraceStep('├─ [useNotes.ts] Promise resolves with Note', 'var(--vue-green)', 0);
+            await addTraceStep('├─ [Sidebar.vue] await refreshNotes()', 'var(--vue-green)', 0);
+            await addTraceStep('├─ [Sidebar.vue] emit("new-note", note.id)', 'var(--vue-green)', 0);
+            await addTraceStep('├─ [App.vue] activeNoteId = id', 'var(--vue-green)', 0);
+            await addTraceStep('└─ [Editor.vue] Displays new empty note', 'var(--vue-green)', 0);
+            await addTraceStep('', 'var(--text-primary)', 0);
+
+            await addTraceStep('═══════════════════════════════════════════════════════════', 'var(--border-color)', 0);
+            await addTraceStep('  ✓ FLOW COMPLETE - Note created successfully', 'var(--success)', 0);
+            await addTraceStep('═══════════════════════════════════════════════════════════', 'var(--border-color)', 0);
+        }
+
+        async function traceErrorFlow() {
+            const output = document.getElementById('traceOutput');
+            output.innerHTML = '';
+
+            await addTraceStep('═══════════════════════════════════════════════════════════', 'var(--border-color)', 0);
+            await addTraceStep('  TRACING: Error Handling Flow', 'var(--text-primary)', 0);
+            await addTraceStep('═══════════════════════════════════════════════════════════', 'var(--border-color)', 0);
+            await addTraceStep('', 'var(--text-primary)', 0);
+
+            await addTraceStep('▸ SCENARIO: Get note that doesn\'t exist', 'var(--warning)', 0);
+            await addTraceStep('│', 'var(--border-color)', 0);
+
+            await addTraceStep('├─ [Vue] invoke("get_note", { id: "invalid-id" })', 'var(--vue-green)', 0);
+            await addTraceStep('│   └─ Wrapped in try/catch', 'var(--text-secondary)', 0);
+            await addTraceStep('│', 'var(--border-color)', 0);
+
+            await addTraceStep('├─ [Tauri IPC] Route to get_note command', 'var(--tauri-blue)', 0);
+            await addTraceStep('│', 'var(--border-color)', 0);
+
+            await addTraceStep('├─ [commands/notes.rs] get_note() handler', 'var(--rust-orange)', 0);
+            await addTraceStep('│   │', 'var(--border-color)', 0);
+            await addTraceStep('│   ├─ sqlx::query_as("SELECT * FROM notes WHERE id = ?")', 'var(--text-secondary)', 0);
+            await addTraceStep('│   │   ├─ .bind("invalid-id")', 'var(--text-secondary)', 0);
+            await addTraceStep('│   │   ├─ .fetch_optional(&pool).await', 'var(--text-secondary)', 0);
+            await addTraceStep('│   │   └─ Returns: Ok(None)  // No row found', '#f1c40f', 0);
+            await addTraceStep('│   │', 'var(--border-color)', 0);
+            await addTraceStep('│   ├─ .ok_or_else(|| "Note not found".to_string())?', 'var(--text-secondary)', 0);
+            await addTraceStep('│   │   └─ None → Err("Note not found")', 'var(--error)', 0);
+            await addTraceStep('│   │', 'var(--border-color)', 0);
+            await addTraceStep('│   └─ ? operator triggers early return', 'var(--error)', 0);
+            await addTraceStep('│       └─ return Err("Note not found")', 'var(--error)', 0);
+            await addTraceStep('│', 'var(--border-color)', 0);
+
+            await addTraceStep('▸ ERROR PROPAGATION', 'var(--error)', 0);
+            await addTraceStep('│', 'var(--border-color)', 0);
+            await addTraceStep('├─ [Rust] Result::Err("Note not found") returned', 'var(--rust-orange)', 0);
+            await addTraceStep('├─ [Tauri IPC] Serializes error as rejection', 'var(--tauri-blue)', 0);
+            await addTraceStep('├─ [JS] Promise rejects with error string', 'var(--vue-green)', 0);
+            await addTraceStep('│', 'var(--border-color)', 0);
+
+            await addTraceStep('▸ FRONTEND ERROR HANDLING', 'var(--vue-green)', 0);
+            await addTraceStep('│', 'var(--border-color)', 0);
+            await addTraceStep('├─ try {', 'var(--text-secondary)', 0);
+            await addTraceStep('│     const note = await invoke("get_note", { id });', 'var(--text-secondary)', 0);
+            await addTraceStep('│   } catch (error) {  // ← Caught here!', 'var(--error)', 0);
+            await addTraceStep('│     error.value = String(error);', 'var(--text-secondary)', 0);
+            await addTraceStep('│     // error.value = "Note not found"', 'var(--error)', 0);
+            await addTraceStep('│   }', 'var(--text-secondary)', 0);
+            await addTraceStep('│', 'var(--border-color)', 0);
+            await addTraceStep('└─ UI displays: "Error: Note not found"', 'var(--error)', 0);
+            await addTraceStep('', 'var(--text-primary)', 0);
+
+            await addTraceStep('═══════════════════════════════════════════════════════════', 'var(--border-color)', 0);
+            await addTraceStep('  ✗ FLOW COMPLETE - Error handled gracefully', 'var(--warning)', 0);
+            await addTraceStep('═══════════════════════════════════════════════════════════', 'var(--border-color)', 0);
+            await addTraceStep('', 'var(--text-primary)', 0);
+
+            await addTraceStep('💡 KEY INSIGHT:', 'var(--tauri-blue)', 0);
+            await addTraceStep('   No exceptions thrown! Error flows through Result types', 'var(--text-secondary)', 0);
+            await addTraceStep('   from Rust → IPC → JavaScript catch block.', 'var(--text-secondary)', 0);
+        }
+
+        // Smooth scroll for navigation
+        document.querySelectorAll('nav a').forEach(anchor => {
+            anchor.addEventListener('click', function(e) {
+                e.preventDefault();
+                const target = document.querySelector(this.getAttribute('href'));
+                target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            });
+        });
+    </script>
+</body>
+</html>

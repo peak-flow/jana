@@ -1,0 +1,1157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Laravel to Rust/Tauri - Interactive Tutorial</title>
+    <style>
+        :root {
+            --rust-orange: #f74c00;
+            --rust-dark: #1a1a1a;
+            --laravel-red: #ff2d20;
+            --tauri-blue: #24c8db;
+            --vue-green: #42b883;
+            --bg-dark: #0d1117;
+            --bg-card: #161b22;
+            --text-primary: #e6edf3;
+            --text-secondary: #8b949e;
+            --border-color: #30363d;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            background: var(--bg-dark);
+            color: var(--text-primary);
+            line-height: 1.6;
+            overflow-x: hidden;
+        }
+
+        /* Header */
+        header {
+            background: linear-gradient(135deg, var(--rust-dark) 0%, #2d1810 100%);
+            padding: 4rem 2rem;
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        header::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23f74c00' fill-opacity='0.05'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+            animation: bgMove 20s linear infinite;
+        }
+
+        @keyframes bgMove {
+            from { background-position: 0 0; }
+            to { background-position: 60px 60px; }
+        }
+
+        h1 {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+            position: relative;
+            animation: fadeInUp 0.8s ease-out;
+        }
+
+        h1 span.rust { color: var(--rust-orange); }
+        h1 span.laravel { color: var(--laravel-red); }
+
+        .subtitle {
+            color: var(--text-secondary);
+            font-size: 1.2rem;
+            position: relative;
+            animation: fadeInUp 0.8s ease-out 0.2s both;
+        }
+
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* Navigation */
+        nav {
+            background: var(--bg-card);
+            border-bottom: 1px solid var(--border-color);
+            padding: 1rem;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        nav ul {
+            display: flex;
+            justify-content: center;
+            gap: 2rem;
+            list-style: none;
+            flex-wrap: wrap;
+        }
+
+        nav a {
+            color: var(--text-secondary);
+            text-decoration: none;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            transition: all 0.3s ease;
+        }
+
+        nav a:hover {
+            color: var(--rust-orange);
+            background: rgba(247, 76, 0, 0.1);
+        }
+
+        /* Main Content */
+        main {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        section {
+            margin-bottom: 4rem;
+            opacity: 0;
+            transform: translateY(40px);
+            transition: all 0.6s ease-out;
+        }
+
+        section.visible {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        h2 {
+            font-size: 2rem;
+            margin-bottom: 1.5rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 2px solid var(--rust-orange);
+            display: inline-block;
+        }
+
+        h3 {
+            font-size: 1.3rem;
+            margin: 1.5rem 0 1rem;
+            color: var(--tauri-blue);
+        }
+
+        /* Brain Map */
+        .brain-map {
+            background: var(--bg-card);
+            border-radius: 16px;
+            padding: 2rem;
+            margin: 2rem 0;
+            border: 1px solid var(--border-color);
+            overflow-x: auto;
+        }
+
+        .brain-map-container {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 2rem;
+            min-width: 900px;
+            position: relative;
+        }
+
+        .stack-column {
+            flex: 1;
+            text-align: center;
+        }
+
+        .stack-title {
+            font-size: 1.5rem;
+            font-weight: bold;
+            padding: 1rem;
+            border-radius: 12px;
+            margin-bottom: 1.5rem;
+        }
+
+        .stack-title.laravel {
+            background: linear-gradient(135deg, var(--laravel-red), #c41e16);
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        .stack-title.rust {
+            background: linear-gradient(135deg, var(--rust-orange), #c43d00);
+            animation: pulse 2s ease-in-out infinite 0.5s;
+        }
+
+        @keyframes pulse {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(247, 76, 0, 0.4); }
+            50% { box-shadow: 0 0 20px 10px rgba(247, 76, 0, 0); }
+        }
+
+        .stack-item {
+            background: var(--bg-dark);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 1rem;
+            margin: 0.5rem 0;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            position: relative;
+        }
+
+        .stack-item:hover {
+            transform: translateX(5px);
+            border-color: var(--rust-orange);
+        }
+
+        .stack-item.active {
+            border-color: var(--tauri-blue);
+            background: rgba(36, 200, 219, 0.1);
+        }
+
+        .stack-item .label {
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .stack-item .desc {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            margin-top: 0.25rem;
+        }
+
+        /* Arrows */
+        .arrow-column {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            gap: 1rem;
+            padding-top: 4rem;
+        }
+
+        .arrow {
+            width: 80px;
+            height: 40px;
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .arrow::before {
+            content: '';
+            position: absolute;
+            width: 60px;
+            height: 2px;
+            background: var(--tauri-blue);
+            animation: arrowFlow 1.5s ease-in-out infinite;
+        }
+
+        .arrow::after {
+            content: '';
+            position: absolute;
+            right: 5px;
+            border: solid var(--tauri-blue);
+            border-width: 0 2px 2px 0;
+            padding: 4px;
+            transform: rotate(-45deg);
+        }
+
+        @keyframes arrowFlow {
+            0%, 100% { opacity: 0.3; }
+            50% { opacity: 1; }
+        }
+
+        /* Code Comparison */
+        .code-comparison {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1.5rem;
+            margin: 2rem 0;
+        }
+
+        @media (max-width: 900px) {
+            .code-comparison {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .code-block {
+            background: var(--bg-card);
+            border-radius: 12px;
+            overflow: hidden;
+            border: 1px solid var(--border-color);
+        }
+
+        .code-header {
+            padding: 0.75rem 1rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .code-header.laravel {
+            background: linear-gradient(90deg, rgba(255, 45, 32, 0.2), transparent);
+            border-bottom: 1px solid var(--laravel-red);
+        }
+
+        .code-header.rust {
+            background: linear-gradient(90deg, rgba(247, 76, 0, 0.2), transparent);
+            border-bottom: 1px solid var(--rust-orange);
+        }
+
+        .code-header .icon {
+            width: 20px;
+            height: 20px;
+        }
+
+        pre {
+            padding: 1rem;
+            overflow-x: auto;
+            font-size: 0.9rem;
+            line-height: 1.5;
+        }
+
+        code {
+            font-family: 'Fira Code', 'Consolas', monospace;
+        }
+
+        .keyword { color: #ff7b72; }
+        .function { color: #d2a8ff; }
+        .string { color: #a5d6ff; }
+        .type { color: #7ee787; }
+        .comment { color: #8b949e; }
+        .variable { color: #ffa657; }
+        .attribute { color: #79c0ff; }
+
+        /* Feature Cards */
+        .feature-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1.5rem;
+            margin: 2rem 0;
+        }
+
+        .feature-card {
+            background: var(--bg-card);
+            border-radius: 12px;
+            padding: 1.5rem;
+            border: 1px solid var(--border-color);
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .feature-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, var(--rust-orange), var(--tauri-blue));
+            transform: scaleX(0);
+            transition: transform 0.3s ease;
+        }
+
+        .feature-card:hover::before {
+            transform: scaleX(1);
+        }
+
+        .feature-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+        }
+
+        .feature-card h4 {
+            color: var(--rust-orange);
+            margin-bottom: 0.75rem;
+            font-size: 1.1rem;
+        }
+
+        .feature-card p {
+            color: var(--text-secondary);
+            font-size: 0.95rem;
+        }
+
+        .feature-card code {
+            background: var(--bg-dark);
+            padding: 0.2rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.85rem;
+        }
+
+        /* Animated Flow Diagram */
+        .flow-diagram {
+            background: var(--bg-card);
+            border-radius: 16px;
+            padding: 2rem;
+            margin: 2rem 0;
+            border: 1px solid var(--border-color);
+        }
+
+        .flow-row {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 1rem;
+            margin: 1rem 0;
+            flex-wrap: wrap;
+        }
+
+        .flow-box {
+            background: var(--bg-dark);
+            border: 2px solid var(--border-color);
+            border-radius: 8px;
+            padding: 1rem 1.5rem;
+            min-width: 150px;
+            text-align: center;
+            transition: all 0.3s ease;
+            position: relative;
+        }
+
+        .flow-box.frontend {
+            border-color: var(--vue-green);
+        }
+
+        .flow-box.ipc {
+            border-color: var(--tauri-blue);
+        }
+
+        .flow-box.backend {
+            border-color: var(--rust-orange);
+        }
+
+        .flow-box.database {
+            border-color: #f1c40f;
+        }
+
+        .flow-box .title {
+            font-weight: 600;
+            margin-bottom: 0.25rem;
+        }
+
+        .flow-box .tech {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
+
+        .flow-arrow {
+            color: var(--text-secondary);
+            font-size: 1.5rem;
+            animation: bounce 1s ease-in-out infinite;
+        }
+
+        .flow-arrow.down {
+            transform: rotate(90deg);
+        }
+
+        @keyframes bounce {
+            0%, 100% { transform: translateX(0); }
+            50% { transform: translateX(5px); }
+        }
+
+        /* Interactive Demo */
+        .demo-area {
+            background: var(--bg-card);
+            border-radius: 16px;
+            padding: 2rem;
+            margin: 2rem 0;
+            border: 1px solid var(--border-color);
+        }
+
+        .demo-buttons {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+            flex-wrap: wrap;
+        }
+
+        .demo-btn {
+            background: linear-gradient(135deg, var(--rust-orange), #c43d00);
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 8px;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .demo-btn:hover {
+            transform: scale(1.05);
+            box-shadow: 0 5px 20px rgba(247, 76, 0, 0.4);
+        }
+
+        .demo-btn:active {
+            transform: scale(0.98);
+        }
+
+        .demo-output {
+            background: var(--bg-dark);
+            border-radius: 8px;
+            padding: 1rem;
+            min-height: 100px;
+            font-family: monospace;
+            white-space: pre-wrap;
+        }
+
+        .demo-output .step {
+            opacity: 0;
+            animation: stepIn 0.5s ease-out forwards;
+        }
+
+        @keyframes stepIn {
+            from {
+                opacity: 0;
+                transform: translateX(-20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        /* Table */
+        .comparison-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 1.5rem 0;
+        }
+
+        .comparison-table th,
+        .comparison-table td {
+            padding: 1rem;
+            text-align: left;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .comparison-table th {
+            background: var(--bg-card);
+            color: var(--rust-orange);
+        }
+
+        .comparison-table tr:hover td {
+            background: rgba(247, 76, 0, 0.05);
+        }
+
+        /* Footer */
+        footer {
+            text-align: center;
+            padding: 2rem;
+            color: var(--text-secondary);
+            border-top: 1px solid var(--border-color);
+        }
+
+        /* Scroll indicator */
+        .scroll-indicator {
+            position: fixed;
+            top: 0;
+            left: 0;
+            height: 3px;
+            background: linear-gradient(90deg, var(--rust-orange), var(--tauri-blue));
+            z-index: 1000;
+            transition: width 0.1s;
+        }
+    </style>
+</head>
+<body>
+    <div class="scroll-indicator" id="scrollIndicator"></div>
+
+    <header>
+        <h1>From <span class="laravel">Laravel/PHP</span> to <span class="rust">Rust/Tauri</span></h1>
+        <p class="subtitle">An Interactive Tutorial - Jana Note App Architecture</p>
+    </header>
+
+    <nav>
+        <ul>
+            <li><a href="#brain-map">Brain Map</a></li>
+            <li><a href="#rust-features">Rust Features</a></li>
+            <li><a href="#data-flow">Data Flow</a></li>
+            <li><a href="#code-compare">Code Comparison</a></li>
+            <li><a href="#interactive">Interactive Demo</a></li>
+        </ul>
+    </nav>
+
+    <main>
+        <!-- Brain Map Section -->
+        <section id="brain-map">
+            <h2>Conceptual Brain Map</h2>
+            <p>Understanding how Laravel concepts map to Rust/Tauri architecture</p>
+
+            <div class="brain-map">
+                <div class="brain-map-container">
+                    <div class="stack-column">
+                        <div class="stack-title laravel">Laravel / PHP</div>
+                        <div class="stack-item" data-pair="1">
+                            <div class="label">Controllers</div>
+                            <div class="desc">Handle HTTP requests, business logic</div>
+                        </div>
+                        <div class="stack-item" data-pair="2">
+                            <div class="label">Eloquent Models</div>
+                            <div class="desc">ORM for database operations</div>
+                        </div>
+                        <div class="stack-item" data-pair="3">
+                            <div class="label">Routes (web.php)</div>
+                            <div class="desc">URL to controller mapping</div>
+                        </div>
+                        <div class="stack-item" data-pair="4">
+                            <div class="label">Middleware</div>
+                            <div class="desc">Request/response pipeline</div>
+                        </div>
+                        <div class="stack-item" data-pair="5">
+                            <div class="label">Blade Templates</div>
+                            <div class="desc">Server-side rendering</div>
+                        </div>
+                        <div class="stack-item" data-pair="6">
+                            <div class="label">.env / Config</div>
+                            <div class="desc">Environment configuration</div>
+                        </div>
+                        <div class="stack-item" data-pair="7">
+                            <div class="label">Migrations</div>
+                            <div class="desc">Database schema versioning</div>
+                        </div>
+                        <div class="stack-item" data-pair="8">
+                            <div class="label">Artisan Commands</div>
+                            <div class="desc">CLI task automation</div>
+                        </div>
+                    </div>
+
+                    <div class="arrow-column">
+                        <div class="arrow"></div>
+                        <div class="arrow"></div>
+                        <div class="arrow"></div>
+                        <div class="arrow"></div>
+                        <div class="arrow"></div>
+                        <div class="arrow"></div>
+                        <div class="arrow"></div>
+                        <div class="arrow"></div>
+                    </div>
+
+                    <div class="stack-column">
+                        <div class="stack-title rust">Rust / Tauri</div>
+                        <div class="stack-item" data-pair="1">
+                            <div class="label">Tauri Commands</div>
+                            <div class="desc">#[tauri::command] async functions</div>
+                        </div>
+                        <div class="stack-item" data-pair="2">
+                            <div class="label">sqlx + Structs</div>
+                            <div class="desc">Type-safe SQL queries</div>
+                        </div>
+                        <div class="stack-item" data-pair="3">
+                            <div class="label">invoke_handler</div>
+                            <div class="desc">Command registration in main.rs</div>
+                        </div>
+                        <div class="stack-item" data-pair="4">
+                            <div class="label">Tauri State</div>
+                            <div class="desc">Managed state injection</div>
+                        </div>
+                        <div class="stack-item" data-pair="5">
+                            <div class="label">Vue Components</div>
+                            <div class="desc">Client-side SPA rendering</div>
+                        </div>
+                        <div class="stack-item" data-pair="6">
+                            <div class="label">Settings Table / Cargo.toml</div>
+                            <div class="desc">DB config + build config</div>
+                        </div>
+                        <div class="stack-item" data-pair="7">
+                            <div class="label">db.rs init()</div>
+                            <div class="desc">Schema creation on startup</div>
+                        </div>
+                        <div class="stack-item" data-pair="8">
+                            <div class="label">Cargo Commands</div>
+                            <div class="desc">cargo build, run, test</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Rust Features Section -->
+        <section id="rust-features">
+            <h2>Rust Features Used in Jana</h2>
+
+            <div class="feature-grid">
+                <div class="feature-card">
+                    <h4>async/await with Tokio</h4>
+                    <p>All database and HTTP operations are async. Tokio runtime handles concurrency without blocking the UI thread.</p>
+                    <pre><code><span class="keyword">pub async fn</span> <span class="function">create_note</span>() -> <span class="type">Result</span>&lt;Note&gt;</code></pre>
+                </div>
+
+                <div class="feature-card">
+                    <h4>Result&lt;T, E&gt; Error Handling</h4>
+                    <p>No exceptions! Explicit error handling with <code>Result</code> and the <code>?</code> operator for propagation.</p>
+                    <pre><code>.await.<span class="function">map_err</span>(|e| e.<span class="function">to_string</span>())?;</code></pre>
+                </div>
+
+                <div class="feature-card">
+                    <h4>Derive Macros</h4>
+                    <p>Auto-generate implementations for serialization, cloning, and debugging.</p>
+                    <pre><code><span class="attribute">#[derive(Serialize, Deserialize, Clone)]</span>
+<span class="keyword">pub struct</span> <span class="type">Note</span> { ... }</code></pre>
+                </div>
+
+                <div class="feature-card">
+                    <h4>State Management</h4>
+                    <p>Tauri injects shared state (like DB pool) into commands automatically.</p>
+                    <pre><code>state: <span class="type">State</span>&lt;'_, <span class="type">DbState</span>&gt;</code></pre>
+                </div>
+
+                <div class="feature-card">
+                    <h4>sqlx Compile-Time Checks</h4>
+                    <p>SQL queries can be verified at compile time. Runtime uses type-safe bindings.</p>
+                    <pre><code><span class="function">sqlx::query</span>(<span class="string">"SELECT * FROM notes"</span>)
+    .<span class="function">bind</span>(&id)</code></pre>
+                </div>
+
+                <div class="feature-card">
+                    <h4>Option&lt;T&gt; for Nullability</h4>
+                    <p>No null pointer exceptions. Optional values are explicit with <code>Option&lt;T&gt;</code>.</p>
+                    <pre><code><span class="keyword">pub</span> title: <span class="type">Option</span>&lt;<span class="type">String</span>&gt;</code></pre>
+                </div>
+
+                <div class="feature-card">
+                    <h4>UUID Generation</h4>
+                    <p>Generate unique IDs with the uuid crate. No database auto-increment needed.</p>
+                    <pre><code><span class="type">Uuid</span>::<span class="function">new_v4</span>().<span class="function">to_string</span>()</code></pre>
+                </div>
+
+                <div class="feature-card">
+                    <h4>reqwest HTTP Client</h4>
+                    <p>Async HTTP client for calling external APIs (like LM Studio).</p>
+                    <pre><code>client.<span class="function">post</span>(&url).<span class="function">json</span>(&req).<span class="function">send</span>().<span class="keyword">await</span></code></pre>
+                </div>
+            </div>
+        </section>
+
+        <!-- Data Flow Section -->
+        <section id="data-flow">
+            <h2>Application Data Flow</h2>
+            <p>How data moves through the Jana app architecture</p>
+
+            <div class="flow-diagram">
+                <h3 style="text-align: center; margin-bottom: 2rem;">Note Creation Flow</h3>
+
+                <div class="flow-row">
+                    <div class="flow-box frontend">
+                        <div class="title">Sidebar.vue</div>
+                        <div class="tech">Click "+" button</div>
+                    </div>
+                    <span class="flow-arrow">→</span>
+                    <div class="flow-box frontend">
+                        <div class="title">useNotes.ts</div>
+                        <div class="tech">Composable layer</div>
+                    </div>
+                    <span class="flow-arrow">→</span>
+                    <div class="flow-box ipc">
+                        <div class="title">Tauri IPC</div>
+                        <div class="tech">invoke("create_note")</div>
+                    </div>
+                </div>
+
+                <div class="flow-row">
+                    <span class="flow-arrow down" style="transform: rotate(90deg);">↓</span>
+                </div>
+
+                <div class="flow-row">
+                    <div class="flow-box backend">
+                        <div class="title">commands/notes.rs</div>
+                        <div class="tech">create_note()</div>
+                    </div>
+                    <span class="flow-arrow">→</span>
+                    <div class="flow-box backend">
+                        <div class="title">Generate</div>
+                        <div class="tech">UUID + Timestamp</div>
+                    </div>
+                    <span class="flow-arrow">→</span>
+                    <div class="flow-box database">
+                        <div class="title">SQLite</div>
+                        <div class="tech">INSERT INTO notes</div>
+                    </div>
+                </div>
+
+                <div class="flow-row">
+                    <span class="flow-arrow" style="transform: rotate(180deg);">←</span>
+                </div>
+
+                <div class="flow-row">
+                    <div class="flow-box frontend">
+                        <div class="title">Editor.vue</div>
+                        <div class="tech">Display new note</div>
+                    </div>
+                    <span class="flow-arrow" style="transform: rotate(180deg);">←</span>
+                    <div class="flow-box frontend">
+                        <div class="title">App.vue</div>
+                        <div class="tech">Set activeNoteId</div>
+                    </div>
+                    <span class="flow-arrow" style="transform: rotate(180deg);">←</span>
+                    <div class="flow-box ipc">
+                        <div class="title">IPC Response</div>
+                        <div class="tech">Note { id, ... }</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Code Comparison Section -->
+        <section id="code-compare">
+            <h2>Code Comparison</h2>
+            <p>Side-by-side: How you'd write it in Laravel vs Rust/Tauri</p>
+
+            <h3>Creating a Note</h3>
+            <div class="code-comparison">
+                <div class="code-block">
+                    <div class="code-header laravel">
+                        <svg class="icon" viewBox="0 0 24 24" fill="#ff2d20"><path d="M23.642 5.43a.364.364 0 01.014.1v5.149c0 .135-.073.26-.189.326l-4.323 2.49v4.934a.378.378 0 01-.188.326L9.93 23.949a.316.316 0 01-.066.027c-.008.002-.016.008-.024.01a.348.348 0 01-.192 0c-.011-.002-.02-.008-.03-.012-.02-.008-.042-.014-.062-.025L.533 18.755a.376.376 0 01-.189-.326V2.974c0-.033.005-.066.014-.098.003-.012.01-.02.014-.032a.369.369 0 01.023-.058c.004-.013.015-.022.023-.033l.033-.045c.012-.01.025-.018.037-.027.014-.012.027-.024.041-.034H.53L5.043.05a.375.375 0 01.375 0L9.93 2.647h.002c.015.01.027.021.04.033l.038.027c.013.014.02.03.033.045.008.011.02.021.025.033.01.02.017.038.024.058.003.011.01.021.013.032.01.031.014.064.014.098v9.652l3.76-2.164V5.527c0-.033.004-.066.013-.098.003-.01.01-.02.013-.032a.487.487 0 01.024-.059c.007-.012.018-.02.025-.033.012-.015.021-.03.033-.043.012-.012.025-.02.037-.028.014-.01.026-.023.041-.032h.001l4.513-2.598a.375.375 0 01.375 0l4.513 2.598c.016.01.027.021.042.031.012.01.025.018.036.028.013.014.022.03.034.044.008.012.019.021.024.033.011.02.018.04.024.06.006.01.012.021.015.032zm-.74 5.032V6.179l-1.578.908-2.182 1.256v4.283zm-4.51 7.75v-4.287l-2.147 1.225-6.126 3.498v4.325zM1.093 3.624v14.588l8.273 4.761v-4.325l-4.322-2.445-.002-.003h-.002c-.014-.01-.025-.021-.04-.031-.012-.012-.025-.02-.035-.03l-.001-.002c-.013-.012-.021-.025-.031-.04-.01-.011-.021-.022-.028-.036h-.002c-.008-.014-.013-.031-.02-.047-.006-.016-.014-.027-.018-.043a.49.49 0 01-.008-.057c-.002-.014-.006-.027-.006-.041V5.789l-2.18-1.257zM5.23.81L1.47 2.974l3.76 2.164 3.758-2.164zm1.956 13.505l2.182-1.256V3.624l-1.58.91-2.182 1.255v9.435zm11.581-10.95l-3.76 2.163 3.76 2.163 3.759-2.164zm-.376 4.978L16.21 7.087l-1.58-.907v4.283l2.182 1.256 1.58.908zm-8.65 9.654l5.514-3.148 2.756-1.572-3.757-2.163-4.323 2.489-3.941 2.27z"/></svg>
+                        Laravel PHP
+                    </div>
+                    <pre><code><span class="comment">// app/Http/Controllers/NoteController.php</span>
+
+<span class="keyword">class</span> <span class="type">NoteController</span> <span class="keyword">extends</span> <span class="type">Controller</span>
+{
+    <span class="keyword">public function</span> <span class="function">store</span>(<span class="type">Request</span> <span class="variable">$request</span>)
+    {
+        <span class="variable">$note</span> = <span class="type">Note</span>::<span class="function">create</span>([
+            <span class="string">'id'</span> => <span class="type">Str</span>::<span class="function">uuid</span>(),
+            <span class="string">'title'</span> => <span class="keyword">null</span>,
+            <span class="string">'content'</span> => <span class="keyword">null</span>,
+        ]);
+
+        <span class="keyword">return</span> <span class="function">response</span>()-><span class="function">json</span>(<span class="variable">$note</span>);
+    }
+}</code></pre>
+                </div>
+
+                <div class="code-block">
+                    <div class="code-header rust">
+                        <svg class="icon" viewBox="0 0 24 24" fill="#f74c00"><path d="M23.687 11.709l-.995-.616a13.559 13.559 0 00-.028-.29l.855-.797a.344.344 0 00-.114-.571l-1.093-.409a8.392 8.392 0 00-.086-.282l.682-.947a.344.344 0 00-.209-.538l-1.153-.259a9.95 9.95 0 00-.14-.262l.49-1.067a.344.344 0 00-.293-.486l-1.176-.1a6.943 6.943 0 00-.187-.235l.283-1.149a.344.344 0 00-.367-.417l-1.162.063a8.192 8.192 0 00-.227-.196l.064-1.189a.344.344 0 00-.432-.331l-1.11.234a6.214 6.214 0 00-.259-.151l-.155-1.187a.344.344 0 00-.483-.235l-1.027.403a6.05 6.05 0 00-.282-.099l-.363-1.14a.344.344 0 00-.521-.127l-.905.56a5.867 5.867 0 00-.296-.04L12.68.342a.343.343 0 00-.543-.015l-.753.697a5.123 5.123 0 00-.3.023l-.725-.633a.344.344 0 00-.547.074l-.574.824a5.008 5.008 0 00-.292.076l-.876-.462a.344.344 0 00-.511.232l-.306.99a5.08 5.08 0 00-.272.141l-.988-.26a.344.344 0 00-.448.362l-.048 1.023a5.93 5.93 0 00-.242.2l-1.058-.039a.344.344 0 00-.362.468l.228 1.005a6.46 6.46 0 00-.198.255l-1.088.194a.344.344 0 00-.26.548l.484.932a6.792 6.792 0 00-.146.3l-1.077.423a.344.344 0 00-.148.595l.713.812a7.44 7.44 0 00-.088.333l-1.028.641a.344.344 0 00-.028.615l.91.654a7.783 7.783 0 00-.027.343l-.943.83a.344.344 0 00.09.605l1.067.467c.017.121.035.242.058.363l-.82.985a.344.344 0 00.2.55l1.177.254c.04.115.084.229.131.341l-.664 1.105a.344.344 0 00.301.519l1.237.024c.063.105.13.208.198.309l-.483 1.186a.344.344 0 00.387.468l1.252-.206c.085.09.172.177.261.262l-.283 1.227a.344.344 0 00.456.397l1.22-.429c.101.068.205.133.311.196l-.07 1.225a.344.344 0 00.508.318l1.14-.635c.113.042.228.08.344.114l.148 1.179a.344.344 0 00.542.236l1.012-.815c.118.012.236.02.354.023l.36 1.093a.344.344 0 00.558.148l.848-.96c.118-.018.235-.04.352-.065l.558.972a.344.344 0 00.553.064l.654-1.066c.113-.046.224-.095.333-.148l.739.816a.344.344 0 00.525-.023l.436-1.125c.101-.07.201-.143.298-.22l.893.631a.344.344 0 00.483-.114l.206-1.138a7.4 7.4 0 00.258-.288l1.018.428a.344.344 0 00.422-.204l-.036-1.161a7.85 7.85 0 00.21-.346l1.103.215a.344.344 0 00.343-.293l-.27-1.144c.062-.128.12-.257.175-.388l1.147-.003a.344.344 0 00.25-.375l-.497-1.083c.044-.138.083-.278.119-.418l1.15-.216a.344.344 0 00.148-.44l-.7-.982c.022-.144.04-.288.053-.433l1.113-.42a.344.344 0 00.041-.496l-.87-.843c0-.146-.006-.291-.015-.436l1.038-.614a.344.344 0 00-.07-.527zM12 20.14a8.14 8.14 0 110-16.28 8.14 8.14 0 010 16.28z"/></svg>
+                        Rust / Tauri
+                    </div>
+                    <pre><code><span class="comment">// src-tauri/src/commands/notes.rs</span>
+
+<span class="attribute">#[tauri::command]</span>
+<span class="keyword">pub async fn</span> <span class="function">create_note</span>(
+    state: <span class="type">State</span>&lt;'_, <span class="type">DbState</span>&gt;
+) -> <span class="type">Result</span>&lt;<span class="type">Note</span>, <span class="type">String</span>&gt; {
+    <span class="keyword">let</span> now = chrono::<span class="type">Utc</span>::<span class="function">now</span>().<span class="function">timestamp</span>();
+    <span class="keyword">let</span> note = <span class="type">Note</span> {
+        id: <span class="type">Uuid</span>::<span class="function">new_v4</span>().<span class="function">to_string</span>(),
+        title: <span class="type">None</span>,
+        content: <span class="type">None</span>,
+        created_at: now,
+        updated_at: now,
+    };
+
+    <span class="function">sqlx::query</span>(<span class="string">"INSERT INTO notes ..."</span>)
+        .<span class="function">bind</span>(&note.id)
+        .<span class="function">execute</span>(&state.pool)
+        .<span class="keyword">await</span>
+        .<span class="function">map_err</span>(|e| e.<span class="function">to_string</span>())?;
+
+    <span class="type">Ok</span>(note)
+}</code></pre>
+                </div>
+            </div>
+
+            <h3>HTTP API Call (LLM Summarization)</h3>
+            <div class="code-comparison">
+                <div class="code-block">
+                    <div class="code-header laravel">
+                        <svg class="icon" viewBox="0 0 24 24" fill="#ff2d20"><path d="M23.642 5.43a.364.364 0 01.014.1v5.149c0 .135-.073.26-.189.326l-4.323 2.49v4.934a.378.378 0 01-.188.326L9.93 23.949a.316.316 0 01-.066.027c-.008.002-.016.008-.024.01a.348.348 0 01-.192 0c-.011-.002-.02-.008-.03-.012-.02-.008-.042-.014-.062-.025L.533 18.755a.376.376 0 01-.189-.326V2.974c0-.033.005-.066.014-.098.003-.012.01-.02.014-.032a.369.369 0 01.023-.058c.004-.013.015-.022.023-.033l.033-.045c.012-.01.025-.018.037-.027.014-.012.027-.024.041-.034H.53L5.043.05a.375.375 0 01.375 0L9.93 2.647h.002c.015.01.027.021.04.033l.038.027c.013.014.02.03.033.045.008.011.02.021.025.033.01.02.017.038.024.058.003.011.01.021.013.032.01.031.014.064.014.098v9.652l3.76-2.164V5.527c0-.033.004-.066.013-.098.003-.01.01-.02.013-.032a.487.487 0 01.024-.059c.007-.012.018-.02.025-.033.012-.015.021-.03.033-.043.012-.012.025-.02.037-.028.014-.01.026-.023.041-.032h.001l4.513-2.598a.375.375 0 01.375 0l4.513 2.598c.016.01.027.021.042.031.012.01.025.018.036.028.013.014.022.03.034.044.008.012.019.021.024.033.011.02.018.04.024.06.006.01.012.021.015.032zm-.74 5.032V6.179l-1.578.908-2.182 1.256v4.283zm-4.51 7.75v-4.287l-2.147 1.225-6.126 3.498v4.325zM1.093 3.624v14.588l8.273 4.761v-4.325l-4.322-2.445-.002-.003h-.002c-.014-.01-.025-.021-.04-.031-.012-.012-.025-.02-.035-.03l-.001-.002c-.013-.012-.021-.025-.031-.04-.01-.011-.021-.022-.028-.036h-.002c-.008-.014-.013-.031-.02-.047-.006-.016-.014-.027-.018-.043a.49.49 0 01-.008-.057c-.002-.014-.006-.027-.006-.041V5.789l-2.18-1.257zM5.23.81L1.47 2.974l3.76 2.164 3.758-2.164zm1.956 13.505l2.182-1.256V3.624l-1.58.91-2.182 1.255v9.435zm11.581-10.95l-3.76 2.163 3.76 2.163 3.759-2.164zm-.376 4.978L16.21 7.087l-1.58-.907v4.283l2.182 1.256 1.58.908zm-8.65 9.654l5.514-3.148 2.756-1.572-3.757-2.163-4.323 2.489-3.941 2.27z"/></svg>
+                        Laravel PHP (Guzzle)
+                    </div>
+                    <pre><code><span class="comment">// Using Laravel HTTP client</span>
+
+<span class="keyword">use</span> <span class="type">Illuminate\Support\Facades\Http</span>;
+
+<span class="variable">$response</span> = <span class="type">Http</span>::<span class="function">timeout</span>(60)
+    -><span class="function">post</span>(<span class="variable">$llmUrl</span>, [
+        <span class="string">'model'</span> => <span class="variable">$model</span>,
+        <span class="string">'messages'</span> => [
+            [<span class="string">'role'</span> => <span class="string">'system'</span>, <span class="string">'content'</span> => <span class="variable">$prompt</span>],
+            [<span class="string">'role'</span> => <span class="string">'user'</span>, <span class="string">'content'</span> => <span class="variable">$content</span>],
+        ],
+        <span class="string">'temperature'</span> => 0.3,
+    ]);
+
+<span class="variable">$summary</span> = <span class="variable">$response</span>-><span class="function">json</span>(<span class="string">'choices.0.message.content'</span>);</code></pre>
+                </div>
+
+                <div class="code-block">
+                    <div class="code-header rust">
+                        <svg class="icon" viewBox="0 0 24 24" fill="#f74c00"><path d="M23.687 11.709l-.995-.616a13.559 13.559 0 00-.028-.29l.855-.797a.344.344 0 00-.114-.571l-1.093-.409a8.392 8.392 0 00-.086-.282l.682-.947a.344.344 0 00-.209-.538l-1.153-.259a9.95 9.95 0 00-.14-.262l.49-1.067a.344.344 0 00-.293-.486l-1.176-.1a6.943 6.943 0 00-.187-.235l.283-1.149a.344.344 0 00-.367-.417l-1.162.063a8.192 8.192 0 00-.227-.196l.064-1.189a.344.344 0 00-.432-.331l-1.11.234a6.214 6.214 0 00-.259-.151l-.155-1.187a.344.344 0 00-.483-.235l-1.027.403a6.05 6.05 0 00-.282-.099l-.363-1.14a.344.344 0 00-.521-.127l-.905.56a5.867 5.867 0 00-.296-.04L12.68.342a.343.343 0 00-.543-.015l-.753.697a5.123 5.123 0 00-.3.023l-.725-.633a.344.344 0 00-.547.074l-.574.824a5.008 5.008 0 00-.292.076l-.876-.462a.344.344 0 00-.511.232l-.306.99a5.08 5.08 0 00-.272.141l-.988-.26a.344.344 0 00-.448.362l-.048 1.023a5.93 5.93 0 00-.242.2l-1.058-.039a.344.344 0 00-.362.468l.228 1.005a6.46 6.46 0 00-.198.255l-1.088.194a.344.344 0 00-.26.548l.484.932a6.792 6.792 0 00-.146.3l-1.077.423a.344.344 0 00-.148.595l.713.812a7.44 7.44 0 00-.088.333l-1.028.641a.344.344 0 00-.028.615l.91.654a7.783 7.783 0 00-.027.343l-.943.83a.344.344 0 00.09.605l1.067.467c.017.121.035.242.058.363l-.82.985a.344.344 0 00.2.55l1.177.254c.04.115.084.229.131.341l-.664 1.105a.344.344 0 00.301.519l1.237.024c.063.105.13.208.198.309l-.483 1.186a.344.344 0 00.387.468l1.252-.206c.085.09.172.177.261.262l-.283 1.227a.344.344 0 00.456.397l1.22-.429c.101.068.205.133.311.196l-.07 1.225a.344.344 0 00.508.318l1.14-.635c.113.042.228.08.344.114l.148 1.179a.344.344 0 00.542.236l1.012-.815c.118.012.236.02.354.023l.36 1.093a.344.344 0 00.558.148l.848-.96c.118-.018.235-.04.352-.065l.558.972a.344.344 0 00.553.064l.654-1.066c.113-.046.224-.095.333-.148l.739.816a.344.344 0 00.525-.023l.436-1.125c.101-.07.201-.143.298-.22l.893.631a.344.344 0 00.483-.114l.206-1.138a7.4 7.4 0 00.258-.288l1.018.428a.344.344 0 00.422-.204l-.036-1.161a7.85 7.85 0 00.21-.346l1.103.215a.344.344 0 00.343-.293l-.27-1.144c.062-.128.12-.257.175-.388l1.147-.003a.344.344 0 00.25-.375l-.497-1.083c.044-.138.083-.278.119-.418l1.15-.216a.344.344 0 00.148-.44l-.7-.982c.022-.144.04-.288.053-.433l1.113-.42a.344.344 0 00.041-.496l-.87-.843c0-.146-.006-.291-.015-.436l1.038-.614a.344.344 0 00-.07-.527zM12 20.14a8.14 8.14 0 110-16.28 8.14 8.14 0 010 16.28z"/></svg>
+                        Rust (reqwest)
+                    </div>
+                    <pre><code><span class="comment">// Using reqwest async client</span>
+
+<span class="keyword">let</span> client = <span class="type">reqwest::Client</span>::<span class="function">builder</span>()
+    .<span class="function">timeout</span>(<span class="type">Duration</span>::<span class="function">from_secs</span>(60))
+    .<span class="function">build</span>()?;
+
+<span class="keyword">let</span> response = client
+    .<span class="function">post</span>(&llm_url)
+    .<span class="function">json</span>(&<span class="type">OpenAIRequest</span> {
+        model: llm_model,
+        messages: <span class="keyword">vec!</span>[...],
+        temperature: 0.3,
+    })
+    .<span class="function">send</span>().<span class="keyword">await</span>?
+    .<span class="function">json</span>::&lt;<span class="type">OpenAIResponse</span>&gt;().<span class="keyword">await</span>?;
+
+<span class="keyword">let</span> summary = response.choices
+    .<span class="function">first</span>()
+    .<span class="function">map</span>(|c| c.message.content.<span class="function">clone</span>());</code></pre>
+                </div>
+            </div>
+        </section>
+
+        <!-- Interactive Demo Section -->
+        <section id="interactive">
+            <h2>Interactive Demo</h2>
+            <p>Click to simulate the data flow through the application</p>
+
+            <div class="demo-area">
+                <div class="demo-buttons">
+                    <button class="demo-btn" onclick="simulateNoteCreation()">Simulate Note Creation</button>
+                    <button class="demo-btn" onclick="simulateSummarization()">Simulate AI Summary</button>
+                    <button class="demo-btn" onclick="clearDemo()">Clear</button>
+                </div>
+                <div class="demo-output" id="demoOutput">
+                    <span style="color: var(--text-secondary);">Click a button to see the flow...</span>
+                </div>
+            </div>
+
+            <h3>Key Differences Summary</h3>
+            <table class="comparison-table">
+                <thead>
+                    <tr>
+                        <th>Aspect</th>
+                        <th>Laravel / PHP</th>
+                        <th>Rust / Tauri</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Error Handling</td>
+                        <td>Exceptions (try/catch)</td>
+                        <td>Result&lt;T, E&gt; + ? operator</td>
+                    </tr>
+                    <tr>
+                        <td>Null Safety</td>
+                        <td>Nullable types, runtime errors</td>
+                        <td>Option&lt;T&gt;, compile-time checks</td>
+                    </tr>
+                    <tr>
+                        <td>Async</td>
+                        <td>Queues, optional async</td>
+                        <td>Native async/await, Tokio</td>
+                    </tr>
+                    <tr>
+                        <td>Database</td>
+                        <td>Eloquent ORM</td>
+                        <td>sqlx (raw SQL, type-safe)</td>
+                    </tr>
+                    <tr>
+                        <td>Memory</td>
+                        <td>Garbage collected</td>
+                        <td>Ownership system, no GC</td>
+                    </tr>
+                    <tr>
+                        <td>Compilation</td>
+                        <td>Interpreted (JIT)</td>
+                        <td>Compiled to native binary</td>
+                    </tr>
+                    <tr>
+                        <td>Type System</td>
+                        <td>Dynamic (with type hints)</td>
+                        <td>Static, strict</td>
+                    </tr>
+                    <tr>
+                        <td>Package Manager</td>
+                        <td>Composer</td>
+                        <td>Cargo</td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+    </main>
+
+    <footer>
+        <p>Jana App - Rust/Tauri Tutorial | Built for learning</p>
+    </footer>
+
+    <script>
+        // Scroll indicator
+        window.addEventListener('scroll', () => {
+            const indicator = document.getElementById('scrollIndicator');
+            const scrollTop = document.documentElement.scrollTop;
+            const scrollHeight = document.documentElement.scrollHeight - window.innerHeight;
+            const progress = (scrollTop / scrollHeight) * 100;
+            indicator.style.width = progress + '%';
+        });
+
+        // Section visibility on scroll
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    entry.target.classList.add('visible');
+                }
+            });
+        }, { threshold: 0.1 });
+
+        document.querySelectorAll('section').forEach(section => {
+            observer.observe(section);
+        });
+
+        // Brain map hover pairing
+        document.querySelectorAll('.stack-item').forEach(item => {
+            item.addEventListener('mouseenter', () => {
+                const pair = item.dataset.pair;
+                document.querySelectorAll(`.stack-item[data-pair="${pair}"]`).forEach(el => {
+                    el.classList.add('active');
+                });
+            });
+            item.addEventListener('mouseleave', () => {
+                document.querySelectorAll('.stack-item').forEach(el => {
+                    el.classList.remove('active');
+                });
+            });
+        });
+
+        // Interactive demo functions
+        let stepDelay = 400;
+
+        function clearDemo() {
+            document.getElementById('demoOutput').innerHTML = '<span style="color: var(--text-secondary);">Click a button to see the flow...</span>';
+        }
+
+        function addStep(text, color = 'var(--text-primary)', delay = 0) {
+            return new Promise(resolve => {
+                setTimeout(() => {
+                    const output = document.getElementById('demoOutput');
+                    const step = document.createElement('div');
+                    step.className = 'step';
+                    step.style.color = color;
+                    step.style.animationDelay = '0s';
+                    step.textContent = text;
+                    output.appendChild(step);
+                    resolve();
+                }, delay);
+            });
+        }
+
+        async function simulateNoteCreation() {
+            const output = document.getElementById('demoOutput');
+            output.innerHTML = '';
+
+            await addStep('🖱️  User clicks "+" button in Sidebar.vue', 'var(--vue-green)', 0);
+            await addStep('   └─ handleNewNote() triggered', 'var(--text-secondary)', stepDelay);
+            await addStep('', 'var(--text-primary)', stepDelay);
+
+            await addStep('📤 useNotes.ts → createNote()', 'var(--vue-green)', stepDelay);
+            await addStep('   └─ invoke("create_note")', 'var(--text-secondary)', stepDelay);
+            await addStep('', 'var(--text-primary)', stepDelay);
+
+            await addStep('🔗 Tauri IPC Bridge', 'var(--tauri-blue)', stepDelay);
+            await addStep('   └─ Serializing to Rust backend...', 'var(--text-secondary)', stepDelay);
+            await addStep('', 'var(--text-primary)', stepDelay);
+
+            await addStep('⚙️  commands/notes.rs::create_note()', 'var(--rust-orange)', stepDelay);
+            await addStep('   ├─ Uuid::new_v4() → "a1b2c3d4-..."', 'var(--text-secondary)', stepDelay);
+            await addStep('   ├─ chrono::Utc::now() → 1706000000', 'var(--text-secondary)', stepDelay);
+            await addStep('   └─ Note { id, title: None, content: None }', 'var(--text-secondary)', stepDelay);
+            await addStep('', 'var(--text-primary)', stepDelay);
+
+            await addStep('💾 SQLite Database', '#f1c40f', stepDelay);
+            await addStep('   └─ INSERT INTO notes (id, title, content, ...)', 'var(--text-secondary)', stepDelay);
+            await addStep('   └─ ✓ Row inserted', 'var(--vue-green)', stepDelay);
+            await addStep('', 'var(--text-primary)', stepDelay);
+
+            await addStep('📥 IPC Response → Vue', 'var(--tauri-blue)', stepDelay);
+            await addStep('   └─ Note { id: "a1b2c3d4-...", ... }', 'var(--text-secondary)', stepDelay);
+            await addStep('', 'var(--text-primary)', stepDelay);
+
+            await addStep('🎨 UI Update', 'var(--vue-green)', stepDelay);
+            await addStep('   ├─ refreshNotes() → list updated', 'var(--text-secondary)', stepDelay);
+            await addStep('   ├─ emit("new-note", id)', 'var(--text-secondary)', stepDelay);
+            await addStep('   └─ Editor.vue displays new note', 'var(--text-secondary)', stepDelay);
+            await addStep('', 'var(--text-primary)', stepDelay);
+
+            await addStep('✅ Note creation complete!', 'var(--vue-green)', stepDelay);
+        }
+
+        async function simulateSummarization() {
+            const output = document.getElementById('demoOutput');
+            output.innerHTML = '';
+
+            await addStep('🖱️  User clicks "Summarize" in SummaryPanel.vue', 'var(--vue-green)', 0);
+            await addStep('   └─ handleSummarize() triggered', 'var(--text-secondary)', stepDelay);
+            await addStep('   └─ isLoading = true', 'var(--text-secondary)', stepDelay);
+            await addStep('', 'var(--text-primary)', stepDelay);
+
+            await addStep('📤 useLLM.ts → summarizeNote(noteId)', 'var(--vue-green)', stepDelay);
+            await addStep('   └─ invoke("summarize_note", { noteId })', 'var(--text-secondary)', stepDelay);
+            await addStep('', 'var(--text-primary)', stepDelay);
+
+            await addStep('🔗 Tauri IPC Bridge', 'var(--tauri-blue)', stepDelay);
+            await addStep('', 'var(--text-primary)', stepDelay);
+
+            await addStep('⚙️  commands/llm.rs::summarize_note()', 'var(--rust-orange)', stepDelay);
+            await addStep('   ├─ SELECT llm_url FROM settings', 'var(--text-secondary)', stepDelay);
+            await addStep('   │  └─ "http://192.168.77.1:1234/v1/..."', '#f1c40f', stepDelay);
+            await addStep('   ├─ SELECT llm_model FROM settings', 'var(--text-secondary)', stepDelay);
+            await addStep('   │  └─ "qwen3-vl-30b"', '#f1c40f', stepDelay);
+            await addStep('   └─ SELECT content FROM notes WHERE id=?', 'var(--text-secondary)', stepDelay);
+            await addStep('      └─ "My note content..."', '#f1c40f', stepDelay);
+            await addStep('', 'var(--text-primary)', stepDelay);
+
+            await addStep('🌐 HTTP Request to LM Studio', '#9b59b6', stepDelay);
+            await addStep('   ├─ POST /v1/chat/completions', 'var(--text-secondary)', stepDelay);
+            await addStep('   ├─ model: "qwen3-vl-30b"', 'var(--text-secondary)', stepDelay);
+            await addStep('   ├─ temperature: 0.3', 'var(--text-secondary)', stepDelay);
+            await addStep('   └─ Waiting for response... (up to 60s)', 'var(--text-secondary)', stepDelay);
+            await addStep('', 'var(--text-primary)', stepDelay * 2);
+
+            await addStep('📨 LLM Response Received', '#9b59b6', stepDelay);
+            await addStep('   └─ "This note discusses key points about..."', 'var(--text-secondary)', stepDelay);
+            await addStep('', 'var(--text-primary)', stepDelay);
+
+            await addStep('💾 Store in Database', '#f1c40f', stepDelay);
+            await addStep('   ├─ DELETE FROM ai_summaries WHERE note_id=?', 'var(--text-secondary)', stepDelay);
+            await addStep('   └─ INSERT INTO ai_summaries (...)', 'var(--text-secondary)', stepDelay);
+            await addStep('', 'var(--text-primary)', stepDelay);
+
+            await addStep('📥 IPC Response → Vue', 'var(--tauri-blue)', stepDelay);
+            await addStep('   └─ AiSummary { summary, model, created_at }', 'var(--text-secondary)', stepDelay);
+            await addStep('', 'var(--text-primary)', stepDelay);
+
+            await addStep('🎨 UI Update', 'var(--vue-green)', stepDelay);
+            await addStep('   ├─ summary.value = result', 'var(--text-secondary)', stepDelay);
+            await addStep('   ├─ isLoading = false', 'var(--text-secondary)', stepDelay);
+            await addStep('   └─ Display summary + model + timestamp', 'var(--text-secondary)', stepDelay);
+            await addStep('', 'var(--text-primary)', stepDelay);
+
+            await addStep('✅ AI summarization complete!', 'var(--vue-green)', stepDelay);
+        }
+
+        // Smooth scroll for navigation
+        document.querySelectorAll('nav a').forEach(anchor => {
+            anchor.addEventListener('click', function(e) {
+                e.preventDefault();
+                const target = document.querySelector(this.getAttribute('href'));
+                target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            });
+        });
+    </script>
+</body>
+</html>
