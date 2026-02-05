@@ -92,6 +92,14 @@ onUnmounted(() => {
   editorView?.destroy();
 });
 
+function immediatelySave() {
+  if (currentFilePath && currentJanaId && editorView) {
+    debouncedSave.flush();
+  }
+}
+
+defineExpose({ immediatelySave });
+
 watch(
   () => props.filePath,
   (newPath) => {

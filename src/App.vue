@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref, onMounted, onUnmounted } from "vue";
 import Sidebar from "./components/Sidebar.vue";
 import Editor from "./components/Editor.vue";
 import SummaryPanel from "./components/SummaryPanel.vue";
@@ -22,6 +22,7 @@ export interface ActiveFile {
 const activeFile = ref<ActiveFile | null>(null);
 const openFiles = ref<ActiveFile[]>([]);
 const showSettings = ref(false);
+const editorRef = ref<InstanceType<typeof Editor> | null>(null);
 
 async function handleOpenFile() {
   try {
@@ -70,6 +71,33 @@ async function onCloseFile(filePath: string) {
   }
 }
 
+// Keyboard shortcuts
+function handleKeydown(e: KeyboardEvent) {
+  const mod = e.metaKey || e.ctrlKey;
+  if (!mod) return;
+
+  if (e.key === "o") {
+    e.preventDefault();
+    handleOpenFile();
+  } else if (e.key === "s") {
+    e.preventDefault();
+    editorRef.value?.immediatelySave();
+  } else if (e.key === "w") {
+    e.preventDefault();
+    if (activeFile.value) {
+      onCloseFile(activeFile.value.filePath);
+    }
+  }
+}
+
+onMounted(() => {
+  window.addEventListener("keydown", handleKeydown);
+});
+
+onUnmounted(() => {
+  window.removeEventListener("keydown", handleKeydown);
+});
+
 // Session restore
 onMounted(async () => {
   try {
@@ -108,6 +136,7 @@ onMounted(async () => {
       @open-settings="showSettings = true"
     />
     <Editor
+      ref="editorRef"
       :file-path="activeFile?.filePath ?? null"
       :jana-id="activeFile?.janaId ?? null"
       :content="activeFile?.content ?? ''"
