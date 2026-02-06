@@ -26,8 +26,19 @@ export interface ActiveFile {
 
 const activeFile = ref<ActiveFile | null>(null);
 const openFiles = ref<ActiveFile[]>([]);
+const dirtyFiles = ref<Set<string>>(new Set());
 const showSettings = ref(false);
 const editorRef = ref<InstanceType<typeof Editor> | null>(null);
+
+function onDirtyChange(filePath: string, isDirty: boolean) {
+  if (isDirty) {
+    dirtyFiles.value.add(filePath);
+  } else {
+    dirtyFiles.value.delete(filePath);
+  }
+  // Trigger reactivity
+  dirtyFiles.value = new Set(dirtyFiles.value);
+}
 
 async function handleOpenFile() {
   try {
@@ -71,6 +82,8 @@ async function onCloseFile(filePath: string) {
     console.error("Failed to close file:", e);
   }
   openFiles.value = openFiles.value.filter((f) => f.filePath !== filePath);
+  dirtyFiles.value.delete(filePath);
+  dirtyFiles.value = new Set(dirtyFiles.value);
   if (activeFile.value?.filePath === filePath) {
     activeFile.value = openFiles.value.length > 0 ? openFiles.value[0] : null;
   }
@@ -202,6 +215,7 @@ onMounted(async () => {
     <Sidebar
       :open-files="openFiles"
       :active-file-path="activeFile?.filePath ?? null"
+      :dirty-files="dirtyFiles"
       @new-file="handleNewFile"
       @open-file="handleOpenFile"
       @select-file="onSelectFile"
@@ -217,6 +231,7 @@ onMounted(async () => {
       :file-path="activeFile?.filePath ?? null"
       :jana-id="activeFile?.janaId ?? null"
       :content="activeFile?.content ?? ''"
+      @dirty-change="onDirtyChange"
     />
     <SummaryPanel
       :jana-id="activeFile?.janaId ?? null"

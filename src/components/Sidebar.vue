@@ -5,6 +5,7 @@ import type { ActiveFile } from "../App.vue";
 defineProps<{
   openFiles: ActiveFile[];
   activeFilePath: string | null;
+  dirtyFiles: Set<string>;
 }>();
 
 const emit = defineEmits<{
@@ -98,7 +99,10 @@ onUnmounted(() => {
         @click="emit('select-file', file.filePath)"
         @contextmenu="openContextMenu($event, file)"
       >
-        <span class="file-name" :class="{ 'temp-file': file.fileName.startsWith('Untitled ') }">{{ file.fileName }}</span>
+        <span class="file-name" :class="{ 'temp-file': file.fileName.startsWith('Untitled ') }">
+          <span v-if="dirtyFiles.has(file.filePath)" class="dirty-indicator" title="Unsaved changes">•</span>
+          {{ file.fileName }}
+        </span>
         <button
           class="close-btn"
           @click="handleCloseFile($event, file.filePath)"
@@ -211,6 +215,12 @@ onUnmounted(() => {
 .file-name.temp-file {
   font-style: italic;
   color: #a6adc8;
+}
+
+.dirty-indicator {
+  color: #f9e2af;
+  margin-right: 4px;
+  font-weight: bold;
 }
 
 .close-btn {

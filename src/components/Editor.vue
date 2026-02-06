@@ -14,6 +14,10 @@ const props = defineProps<{
   content: string;
 }>();
 
+const emit = defineEmits<{
+  (e: "dirty-change", filePath: string, isDirty: boolean): void;
+}>();
+
 const editorRef = ref<HTMLDivElement>();
 const saveStatus = ref<"saved" | "saving" | "idle">("idle");
 let editorView: EditorView | null = null;
@@ -25,6 +29,7 @@ const debouncedSave = debounce(async (filePath: string, janaId: string, content:
   try {
     await saveFile(filePath, janaId, content);
     saveStatus.value = "saved";
+    emit("dirty-change", filePath, false);
   } catch (e) {
     console.error("Save failed:", e);
     saveStatus.value = "idle";
@@ -48,6 +53,7 @@ function createEditor(content: string) {
       EditorView.updateListener.of((update) => {
         if (update.docChanged && currentFilePath && currentJanaId) {
           saveStatus.value = "idle";
+          emit("dirty-change", currentFilePath, true);
           debouncedSave(currentFilePath, currentJanaId, update.state.doc.toString());
         }
       }),
