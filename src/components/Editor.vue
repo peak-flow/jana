@@ -5,6 +5,7 @@ import { EditorView, keymap, lineNumbers, highlightActiveLine } from "@codemirro
 import { markdown } from "@codemirror/lang-markdown";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { search, searchKeymap, highlightSelectionMatches } from "@codemirror/search";
 import { debounce } from "lodash-es";
 import { saveFile } from "../composables/useFiles";
 
@@ -47,7 +48,9 @@ function createEditor(content: string) {
       lineNumbers(),
       highlightActiveLine(),
       history(),
-      keymap.of([...defaultKeymap, ...historyKeymap]),
+      keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
+      search(),
+      highlightSelectionMatches(),
       markdown(),
       oneDark,
       EditorView.updateListener.of((update) => {
@@ -168,5 +171,38 @@ watch(
 
 .editor-container :deep(.cm-editor) {
   height: 100%;
+}
+
+.editor-container :deep(.cm-search) {
+  background: #1e1e2e;
+  border-bottom: 1px solid #313244;
+}
+
+.editor-container :deep(.cm-search label),
+.editor-container :deep(.cm-search button) {
+  color: #cdd6f4;
+}
+
+.editor-container :deep(.cm-search input) {
+  background: #313244;
+  color: #cdd6f4;
+  border: 1px solid #45475a;
+  border-radius: 3px;
+}
+
+.editor-container :deep(.cm-search button:hover) {
+  background: #313244;
+}
+
+.editor-container :deep(.cm-selectionMatch) {
+  background: rgba(137, 180, 250, 0.2);
+}
+
+.editor-container :deep(.cm-searchMatch) {
+  background: rgba(249, 226, 175, 0.3);
+}
+
+.editor-container :deep(.cm-searchMatch-selected) {
+  background: rgba(249, 226, 175, 0.5);
 }
 </style>

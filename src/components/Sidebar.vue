@@ -68,6 +68,10 @@ function onDocumentClick() {
   closeContextMenu();
 }
 
+function isTempFile(filePath: string): boolean {
+  return filePath.includes('/jana/temp/');
+}
+
 onMounted(() => {
   document.addEventListener("click", onDocumentClick);
 });
@@ -99,7 +103,8 @@ onUnmounted(() => {
         @click="emit('select-file', file.filePath)"
         @contextmenu="openContextMenu($event, file)"
       >
-        <span class="file-name" :class="{ 'temp-file': file.fileName.startsWith('Untitled ') }">
+        <span class="file-name" :class="{ 'temp-file': isTempFile(file.filePath) }">
+          <span v-if="isTempFile(file.filePath)" class="temp-indicator" title="Temporary file (not saved to disk)">○</span>
           <span v-if="dirtyFiles.has(file.filePath)" class="dirty-indicator" title="Unsaved changes">•</span>
           {{ file.fileName }}
         </span>
@@ -140,8 +145,6 @@ onUnmounted(() => {
 
 <style scoped>
 .sidebar {
-  width: 200px;
-  min-width: 200px;
   border-right: 1px solid #313244;
   display: flex;
   flex-direction: column;
@@ -215,6 +218,12 @@ onUnmounted(() => {
 .file-name.temp-file {
   font-style: italic;
   color: #a6adc8;
+}
+
+.temp-indicator {
+  color: #89b4fa;
+  margin-right: 2px;
+  font-weight: bold;
 }
 
 .dirty-indicator {

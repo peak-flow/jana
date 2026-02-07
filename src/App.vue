@@ -29,6 +29,25 @@ const openFiles = ref<ActiveFile[]>([]);
 const dirtyFiles = ref<Set<string>>(new Set());
 const showSettings = ref(false);
 const editorRef = ref<InstanceType<typeof Editor> | null>(null);
+const sidebarWidth = ref(200);
+const isResizing = ref(false);
+const showSummaryPanel = ref(true);
+
+function onResizeStart(e: MouseEvent) {
+  e.preventDefault();
+  isResizing.value = true;
+  const onMove = (ev: MouseEvent) => {
+    const w = Math.min(Math.max(ev.clientX, 120), 500);
+    sidebarWidth.value = w;
+  };
+  const onUp = () => {
+    isResizing.value = false;
+    document.removeEventListener("mousemove", onMove);
+    document.removeEventListener("mouseup", onUp);
+  };
+  document.addEventListener("mousemove", onMove);
+  document.addEventListener("mouseup", onUp);
+}
 
 function onDirtyChange(filePath: string, isDirty: boolean) {
   if (isDirty) {
@@ -211,11 +230,12 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="app-layout">
+  <div class="app-layout" :class="{ resizing: isResizing }">
     <Sidebar
       :open-files="openFiles"
       :active-file-path="activeFile?.filePath ?? null"
       :dirty-files="dirtyFiles"
+      :style="{ width: sidebarWidth + 'px', minWidth: sidebarWidth + 'px' }"
       @new-file="handleNewFile"
       @open-file="handleOpenFile"
       @select-file="onSelectFile"
@@ -226,6 +246,7 @@ onMounted(async () => {
       @save-as="handleSaveAs"
       @open-settings="showSettings = true"
     />
+    <div class="resize-handle" @mousedown="onResizeStart" />
     <Editor
       ref="editorRef"
       :file-path="activeFile?.filePath ?? null"
@@ -233,7 +254,11 @@ onMounted(async () => {
       :content="activeFile?.content ?? ''"
       @dirty-change="onDirtyChange"
     />
+    <button class="panel-toggle" @click="showSummaryPanel = !showSummaryPanel" :title="showSummaryPanel ? 'Hide AI panel' : 'Show AI panel'">
+      {{ showSummaryPanel ? '›' : '‹' }}
+    </button>
     <SummaryPanel
+      v-show="showSummaryPanel"
       :jana-id="activeFile?.janaId ?? null"
       :file-path="activeFile?.filePath ?? null"
     />
@@ -246,5 +271,41 @@ onMounted(async () => {
   display: flex;
   height: 100%;
   width: 100%;
+}
+
+.app-layout.resizing {
+  user-select: none;
+  cursor: col-resize;
+}
+
+.resize-handle {
+  width: 4px;
+  cursor: col-resize;
+  background: transparent;
+  flex-shrink: 0;
+  position: relative;
+}
+
+.resize-handle:hover,
+.app-layout.resizing .resize-handle {
+  background: #89b4fa;
+}
+
+.panel-toggle {
+  background: #181825;
+  border: none;
+  border-left: 1px solid #313244;
+  color: #6c7086;
+  cursor: pointer;
+  font-size: 16px;
+  padding: 0 4px;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.panel-toggle:hover {
+  color: #cdd6f4;
+  background: #1e1e2e;
 }
 </style>
