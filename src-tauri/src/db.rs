@@ -106,6 +106,118 @@ impl DbState {
         .execute(pool)
         .await?;
 
+        // --- Multi-window B-lite schema (Milestone 1) ---
+        // One row per editor window. `active_tab_id` is the tab focused in that window.
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS app_windows (
+                window_id     TEXT PRIMARY KEY,
+                label         TEXT,
+                active_tab_id TEXT,
+                created_at    INTEGER NOT NULL,
+                last_focused  INTEGER NOT NULL
+            )"
+        )
+        .execute(pool)
+        .await?;
+
+        // Per-window viewports onto files. `file_path` is intentionally NOT unique here:
+        // the same file can be open in multiple windows/tabs (this is what `open_files`
+        // could not represent). Buffers themselves are reconstructed at runtime, not stored.
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS open_tabs (
+                tab_id      TEXT PRIMARY KEY,
+                window_id   TEXT NOT NULL,
+                file_path   TEXT NOT NULL,
+                jana_id     TEXT NOT NULL,
+                tab_order   INTEGER NOT NULL DEFAULT 0,
+                cursor_line INTEGER NOT NULL DEFAULT 1,
+                cursor_col  INTEGER NOT NULL DEFAULT 1,
+                scroll_top  INTEGER NOT NULL DEFAULT 0,
+                last_opened INTEGER NOT NULL
+            )"
+        )
+        .execute(pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_open_tabs_window ON open_tabs(window_id)"
+        )
+        .execute(pool)
+        .await?;
+
+        // One-time migration: seed a default window from the legacy `open_files` session.
+        // Runs only when no windows exist yet but legacy rows do, so it is idempotent.
+        // `open_files` is deliberately kept as legacy and NOT dropped during the transition.
+        let windows_empty: bool = sqlx::query_scalar("SELECT COUNT(*) = 0 FROM app_windows")
+            .fetch_one(pool)
+            .await?;
+        let has_legacy_files: bool = sqlx::query_scalar("SELECT COUNT(*) > 0 FROM open_files")
+            .fetch_one(pool)
+            .await?;
+
+        if windows_empty && has_legacy_files {
+            // Wrap the copy in a transaction. Inserting the window row flips the
+            // `windows_empty` guard, so a partial failure mid-copy would otherwise
+            // strand the remaining legacy rows permanently on the next launch.
+            let mut tx = pool.begin().await?;
+
+            // Stable id "main" matches the frontend's URL-less fallback
+            // (`window_id ?? "main"`), so Milestone 2's `list_tabs` finds these tabs.
+            let window_id = "main".to_string();
+            let now = chrono::Utc::now().timestamp();
+
+            let legacy: Vec<(String, String, i64, i64, i64, i64)> = sqlx::query_as(
+                "SELECT file_path, jana_id, tab_order, cursor_line, cursor_col, last_opened
+                 FROM open_files ORDER BY tab_order"
+            )
+            .fetch_all(&mut *tx)
+            .await?;
+
+            // Create the default window first; its active tab is set once tabs exist.
+            sqlx::query(
+                "INSERT INTO app_windows (window_id, label, active_tab_id, created_at, last_focused)
+                 VALUES (?, 'Main', NULL, ?, ?)"
+            )
+            .bind(&window_id)
+            .bind(now)
+            .bind(now)
+            .execute(&mut *tx)
+            .await?;
+
+            let mut first_tab_id: Option<String> = None;
+            for (file_path, jana_id, tab_order, cursor_line, cursor_col, last_opened) in legacy {
+                let tab_id = uuid::Uuid::new_v4().to_string();
+                if first_tab_id.is_none() {
+                    first_tab_id = Some(tab_id.clone());
+                }
+                sqlx::query(
+                    "INSERT INTO open_tabs
+                     (tab_id, window_id, file_path, jana_id, tab_order, cursor_line, cursor_col, scroll_top, last_opened)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)"
+                )
+                .bind(&tab_id)
+                .bind(&window_id)
+                .bind(&file_path)
+                .bind(&jana_id)
+                .bind(tab_order)
+                .bind(cursor_line)
+                .bind(cursor_col)
+                .bind(last_opened)
+                .execute(&mut *tx)
+                .await?;
+            }
+
+            if let Some(active_tab_id) = first_tab_id {
+                sqlx::query("UPDATE app_windows SET active_tab_id = ? WHERE window_id = ?")
+                    .bind(&active_tab_id)
+                    .bind(&window_id)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+
+            tx.commit().await?;
+        }
+
         Ok(())
     }
 }
