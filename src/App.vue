@@ -6,9 +6,10 @@ import SummaryPanel from "./components/SummaryPanel.vue";
 import SettingsModal from "./components/SettingsModal.vue";
 import {
   openFileDialog,
-  readFile,
   listTabs,
   closeTab,
+  acquireBuffer,
+  releaseBuffer,
   forkFile,
   clearAiHistory,
   revealInFinder,
@@ -19,10 +20,10 @@ import {
 
 export interface TabView {
   tabId: string;
+  bufferId: string;
   filePath: string;
   janaId: string;
   fileName: string;
-  content: string;
 }
 
 // Each window owns its own tabs. The first window has no `?window_id=` and
@@ -74,27 +75,28 @@ async function handleOpenFile() {
   try {
     const result = await openFileDialog(windowId);
     if (!result) return;
-    addTabToList(result);
+    await addTabToList(result);
   } catch (e) {
     console.error("Failed to open file:", e);
   }
 }
 
-function addTabToList(result: TabResult) {
-  // Backend dedups by (window_id, file_path), so reopening a file returns its
-  // existing tab_id — just activate it instead of pushing a duplicate.
+// Turn a TabResult into an open tab, acquiring its backend buffer. Reopening a
+// file the backend already deduped to an existing tab just re-activates it.
+async function addTabToList(result: TabResult) {
   const existing = tabs.value.find((t) => t.tabId === result.tab_id);
   if (existing) {
     activeTabId.value = existing.tabId;
     return;
   }
 
+  const buf = await acquireBuffer(result.file_path);
   const tab: TabView = {
     tabId: result.tab_id,
+    bufferId: buf.buffer_id,
     filePath: result.file_path,
-    janaId: result.jana_id,
+    janaId: buf.jana_id,
     fileName: result.file_name,
-    content: result.content,
   };
   tabs.value.push(tab);
   activeTabId.value = tab.tabId;
@@ -108,6 +110,7 @@ async function onCloseTab(tabId: string) {
   const tab = tabs.value.find((t) => t.tabId === tabId);
   try {
     await closeTab(tabId);
+    if (tab) await releaseBuffer(tab.bufferId);
   } catch (e) {
     console.error("Failed to close tab:", e);
   }
@@ -152,7 +155,7 @@ async function onRevealInFinder(filePath: string) {
 async function handleNewFile() {
   try {
     const result = await createNewFile(windowId);
-    addTabToList(result);
+    await addTabToList(result);
   } catch (e) {
     console.error("Failed to create new file:", e);
   }
@@ -162,21 +165,18 @@ async function handleSaveAs(tabId: string) {
   try {
     const tab = tabs.value.find((t) => t.tabId === tabId);
     if (!tab) return;
-    // Flush editor if this is the active tab, then grab its current content.
-    const isActive = activeTabId.value === tabId;
-    if (isActive) {
-      editorRef.value?.immediatelySave();
+    // Ensure the active editor's pending edits are in the backend buffer first;
+    // Save As reads content from the buffer (authoritative).
+    if (activeTabId.value === tabId) {
+      await editorRef.value?.immediatelySave();
     }
-    const content = isActive
-      ? (editorRef.value?.getContent() ?? tab.content)
-      : tab.content;
-    const newPath = await saveTempFileAs(tabId, tab.filePath, tab.janaId, content);
-    if (!newPath) return;
+    const result = await saveTempFileAs(tabId, tab.filePath);
+    if (!result) return;
     // The file moved temp → real: update the tab and clear its dirty marker.
     dirtyFiles.value.delete(tab.filePath);
-    tab.filePath = newPath;
-    tab.fileName = newPath.split("/").pop() ?? newPath;
-    tab.content = content;
+    tab.filePath = result.file_path;
+    tab.fileName = result.file_path.split("/").pop() ?? result.file_path;
+    tab.bufferId = result.buffer_id;
     dirtyFiles.value = new Set(dirtyFiles.value);
   } catch (e) {
     console.error("Failed to save as:", e);
@@ -214,19 +214,19 @@ onUnmounted(() => {
   window.removeEventListener("keydown", handleKeydown);
 });
 
-// Session restore — load this window's tabs and hydrate each with file content.
+// Session restore — load this window's tabs and acquire each file's buffer.
 onMounted(async () => {
   try {
     const entries = await listTabs(windowId);
     for (const entry of entries.sort((a, b) => a.tab_order - b.tab_order)) {
       try {
-        const result = await readFile(entry.file_path);
+        const buf = await acquireBuffer(entry.file_path);
         tabs.value.push({
           tabId: entry.tab_id,
-          filePath: result.file_path,
-          janaId: result.jana_id,
-          fileName: result.file_name,
-          content: result.content,
+          bufferId: buf.buffer_id,
+          filePath: entry.file_path,
+          janaId: buf.jana_id,
+          fileName: buf.file_name,
         });
       } catch {
         // File no longer exists on disk — drop the stale tab.
@@ -263,8 +263,7 @@ onMounted(async () => {
     <Editor
       ref="editorRef"
       :file-path="activeTab?.filePath ?? null"
-      :jana-id="activeTab?.janaId ?? null"
-      :content="activeTab?.content ?? ''"
+      :buffer-id="activeTab?.bufferId ?? null"
       @dirty-change="onDirtyChange"
     />
     <button class="panel-toggle" @click="showSummaryPanel = !showSummaryPanel" :title="showSummaryPanel ? 'Hide AI panel' : 'Show AI panel'">

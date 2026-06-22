@@ -1,0 +1,416 @@
+use serde::Serialize;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use tauri::State;
+
+use crate::frontmatter;
+
+/// The content authority for one open file. There is exactly one `BufferState` per
+/// open file, shared by every tab/window viewing it. The backend owns the content
+/// and is the only writer to disk.
+pub struct BufferState {
+    pub file_path: String,
+    pub jana_id: String,
+    pub content: String,
+    pub version: u64,
+    pub last_saved_version: u64,
+    pub refcount: u32,
+    /// Unix millis of the last accepted edit — drives the flush loop's idle check.
+    pub last_edit: i64,
+}
+
+impl BufferState {
+    fn dirty(&self) -> bool {
+        self.version > self.last_saved_version
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct BufferRegistry {
+    inner: Arc<Mutex<HashMap<String, BufferState>>>,
+}
+
+impl BufferRegistry {
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, BufferState>> {
+        self.inner.lock().expect("buffer registry mutex poisoned")
+    }
+}
+
+#[derive(Serialize)]
+pub struct AcquireResult {
+    pub buffer_id: String,
+    pub jana_id: String,
+    pub content: String,
+    pub version: u64,
+    pub file_name: String,
+}
+
+#[derive(Serialize)]
+pub struct BufferSnapshot {
+    pub jana_id: String,
+    pub content: String,
+    pub version: u64,
+}
+
+#[derive(Serialize)]
+pub struct UpdateResult {
+    pub version: u64,
+    pub conflict: bool,
+    /// Authoritative content, sent back only on conflict so the caller can resync.
+    pub content: Option<String>,
+}
+
+fn now_millis() -> i64 {
+    chrono::Utc::now().timestamp_millis()
+}
+
+fn file_name_of(path: &str) -> String {
+    std::path::Path::new(path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("unknown")
+        .to_string()
+}
+
+/// Canonical absolute path = the open-file identity. Resolving symlinks/`..` means
+/// two paths to the same file map to one buffer. Falls back to the raw path when
+/// the file can't be canonicalized (should not happen for files we have opened).
+pub fn canonical_buffer_id(file_path: &str) -> String {
+    std::fs::canonicalize(file_path)
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| file_path.to_string())
+}
+
+/// Register a view on a file's buffer, loading it from disk on first reference.
+#[tauri::command]
+pub async fn acquire_buffer(
+    file_path: String,
+    registry: State<'_, BufferRegistry>,
+) -> Result<AcquireResult, String> {
+    let buffer_id = canonical_buffer_id(&file_path);
+    let file_name = file_name_of(&file_path);
+
+    // Fast path: already loaded — just add a reference.
+    {
+        let mut map = registry.lock();
+        if let Some(buf) = map.get_mut(&buffer_id) {
+            buf.refcount += 1;
+            return Ok(AcquireResult {
+                buffer_id,
+                jana_id: buf.jana_id.clone(),
+                content: buf.content.clone(),
+                version: buf.version,
+                file_name,
+            });
+        }
+    }
+
+    // Load from disk outside the lock (this may inject a jana_id and write).
+    let (jana_id, content) = frontmatter::ensure_jana_id(&file_path)?;
+
+    let mut map = registry.lock();
+    let buf = map.entry(buffer_id.clone()).or_insert_with(|| BufferState {
+        file_path: file_path.clone(),
+        jana_id: jana_id.clone(),
+        content: content.clone(),
+        version: 0,
+        last_saved_version: 0,
+        refcount: 0,
+        last_edit: now_millis(),
+    });
+    buf.refcount += 1;
+    Ok(AcquireResult {
+        buffer_id,
+        jana_id: buf.jana_id.clone(),
+        content: buf.content.clone(),
+        version: buf.version,
+        file_name,
+    })
+}
+
+/// Read a buffer's current content + version without changing its refcount. Used by
+/// the editor each time it loads a tab, so it always shows authoritative content.
+#[tauri::command]
+pub async fn get_buffer(
+    buffer_id: String,
+    registry: State<'_, BufferRegistry>,
+) -> Result<BufferSnapshot, String> {
+    let map = registry.lock();
+    let buf = map.get(&buffer_id).ok_or("Buffer not found")?;
+    Ok(BufferSnapshot {
+        jana_id: buf.jana_id.clone(),
+        content: buf.content.clone(),
+        version: buf.version,
+    })
+}
+
+/// Apply an edit to a buffer. Accepts the edit only if `base_version` matches the
+/// current version (kills last-writer-wins); otherwise returns the authoritative
+/// content so the caller can resync.
+#[tauri::command]
+pub async fn update_buffer(
+    buffer_id: String,
+    content: String,
+    base_version: u64,
+    registry: State<'_, BufferRegistry>,
+) -> Result<UpdateResult, String> {
+    let mut map = registry.lock();
+    let buf = map.get_mut(&buffer_id).ok_or("Buffer not found")?;
+    if base_version == buf.version {
+        buf.content = content;
+        buf.version += 1;
+        buf.last_edit = now_millis();
+        Ok(UpdateResult {
+            version: buf.version,
+            conflict: false,
+            content: None,
+        })
+    } else {
+        Ok(UpdateResult {
+            version: buf.version,
+            conflict: true,
+            content: Some(buf.content.clone()),
+        })
+    }
+}
+
+/// Drop a view's reference. When the last view is released, the buffer is flushed
+/// to disk (if dirty) and removed from the registry.
+#[tauri::command]
+pub async fn release_buffer(
+    buffer_id: String,
+    registry: State<'_, BufferRegistry>,
+) -> Result<(), String> {
+    let to_flush = {
+        let mut map = registry.lock();
+        match map.get_mut(&buffer_id) {
+            Some(buf) => {
+                if buf.refcount > 0 {
+                    buf.refcount -= 1;
+                }
+                if buf.refcount == 0 {
+                    let data = if buf.dirty() {
+                        Some((buf.file_path.clone(), buf.jana_id.clone(), buf.content.clone()))
+                    } else {
+                        None
+                    };
+                    map.remove(&buffer_id);
+                    data
+                } else {
+                    None
+                }
+            }
+            None => None,
+        }
+    };
+    if let Some((file_path, jana_id, content)) = to_flush {
+        let full = frontmatter::compose_with_frontmatter(&jana_id, &content);
+        std::fs::write(&file_path, &full).map_err(|e| format!("Failed to flush buffer: {}", e))?;
+    }
+    Ok(())
+}
+
+/// Update a loaded buffer's jana_id after a fork, so the flush loop writes the new
+/// identity rather than re-stamping the file with the old one.
+pub fn set_buffer_jana_id(registry: &BufferRegistry, file_path: &str, new_jana_id: &str) {
+    let buffer_id = canonical_buffer_id(file_path);
+    let mut map = registry.lock();
+    if let Some(buf) = map.get_mut(&buffer_id) {
+        buf.jana_id = new_jana_id.to_string();
+    }
+}
+
+/// Read a loaded buffer's (jana_id, content) by file path — authoritative source
+/// for operations like Save As.
+pub fn buffer_content(registry: &BufferRegistry, file_path: &str) -> Option<(String, String)> {
+    let buffer_id = canonical_buffer_id(file_path);
+    let map = registry.lock();
+    map.get(&buffer_id).map(|b| (b.jana_id.clone(), b.content.clone()))
+}
+
+/// Re-key a buffer when its file moves (Save As). Preserves refcount/version and
+/// marks it clean (the caller has just written `content` to `new_path`). Returns the
+/// new buffer_id + version, or None if the old buffer wasn't loaded.
+pub fn rekey_buffer(
+    registry: &BufferRegistry,
+    old_path: &str,
+    new_path: &str,
+    jana_id: &str,
+    content: &str,
+) -> Option<(String, u64)> {
+    let old_id = canonical_buffer_id(old_path);
+    let new_id = canonical_buffer_id(new_path);
+    let mut map = registry.lock();
+    if let Some(mut buf) = map.remove(&old_id) {
+        buf.file_path = new_path.to_string();
+        buf.jana_id = jana_id.to_string();
+        buf.content = content.to_string();
+        buf.last_saved_version = buf.version; // already written to disk by the caller
+        let version = buf.version;
+        map.insert(new_id.clone(), buf);
+        Some((new_id, version))
+    } else {
+        None
+    }
+}
+
+fn flush_where(registry: &BufferRegistry, require_idle: bool) {
+    let now = now_millis();
+    let pending: Vec<(String, String, String, String, u64)> = {
+        let map = registry.lock();
+        map.iter()
+            .filter(|(_, b)| b.dirty() && (!require_idle || now - b.last_edit > 800))
+            .map(|(id, b)| {
+                (
+                    id.clone(),
+                    b.file_path.clone(),
+                    b.jana_id.clone(),
+                    b.content.clone(),
+                    b.version,
+                )
+            })
+            .collect()
+    };
+
+    for (id, file_path, jana_id, content, version) in pending {
+        let full = frontmatter::compose_with_frontmatter(&jana_id, &content);
+        match std::fs::write(&file_path, &full) {
+            Ok(_) => {
+                // Only advance the saved marker if no newer edit landed mid-write.
+                let mut map = registry.lock();
+                if let Some(buf) = map.get_mut(&id) {
+                    if buf.version == version {
+                        buf.last_saved_version = version;
+                    }
+                }
+            }
+            Err(e) => eprintln!("flush write failed for {}: {}", file_path, e),
+        }
+    }
+}
+
+/// Flush buffers that are dirty and have been idle for >800ms. The periodic tick.
+pub fn flush_idle_buffers(registry: &BufferRegistry) {
+    flush_where(registry, true);
+}
+
+/// Flush every dirty buffer regardless of idle time — used on app exit.
+pub fn flush_all(registry: &BufferRegistry) {
+    flush_where(registry, false);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_path(name: &str) -> String {
+        let mut p = std::env::temp_dir();
+        p.push(format!("jana_buftest_{}_{}", std::process::id(), name));
+        p.to_string_lossy().to_string()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn insert_buffer(
+        reg: &BufferRegistry,
+        key: &str,
+        path: &str,
+        jana: &str,
+        content: &str,
+        version: u64,
+        last_saved: u64,
+        last_edit: i64,
+    ) {
+        reg.lock().insert(
+            key.to_string(),
+            BufferState {
+                file_path: path.to_string(),
+                jana_id: jana.to_string(),
+                content: content.to_string(),
+                version,
+                last_saved_version: last_saved,
+                refcount: 1,
+                last_edit,
+            },
+        );
+    }
+
+    #[test]
+    fn flush_idle_writes_dirty_buffer_and_marks_saved() {
+        let path = temp_path("flush.md");
+        let _ = std::fs::remove_file(&path);
+        let reg = BufferRegistry::default();
+        // dirty (version 3 > saved 0) and idle (last_edit at epoch).
+        insert_buffer(&reg, &path, &path, "jid-1", "hello body", 3, 0, 0);
+
+        flush_idle_buffers(&reg);
+
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        assert!(on_disk.contains("jana_id: jid-1"), "frontmatter id written");
+        assert!(on_disk.contains("hello body"), "content written");
+        assert_eq!(reg.lock().get(&path).unwrap().last_saved_version, 3);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn flush_idle_skips_recently_edited_buffer() {
+        let path = temp_path("recent.md");
+        let _ = std::fs::remove_file(&path);
+        let reg = BufferRegistry::default();
+        // dirty but edited "now" → still within the idle window → not written yet.
+        insert_buffer(&reg, &path, &path, "jid-2", "x", 1, 0, now_millis());
+
+        flush_idle_buffers(&reg);
+
+        assert!(!std::path::Path::new(&path).exists());
+    }
+
+    #[test]
+    fn flush_skips_clean_buffer() {
+        let path = temp_path("clean.md");
+        let _ = std::fs::remove_file(&path);
+        let reg = BufferRegistry::default();
+        // saved_version == version → not dirty.
+        insert_buffer(&reg, &path, &path, "jid-3", "x", 2, 2, 0);
+
+        flush_idle_buffers(&reg);
+
+        assert!(!std::path::Path::new(&path).exists());
+    }
+
+    #[test]
+    fn set_jana_id_updates_loaded_buffer() {
+        let path = temp_path("fork.md");
+        std::fs::write(&path, "x").unwrap();
+        let key = canonical_buffer_id(&path);
+        let reg = BufferRegistry::default();
+        insert_buffer(&reg, &key, &path, "old-jid", "x", 1, 1, 0);
+
+        set_buffer_jana_id(&reg, &path, "new-jid");
+
+        assert_eq!(reg.lock().get(&key).unwrap().jana_id, "new-jid");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn rekey_moves_buffer_and_marks_clean() {
+        let old = temp_path("old.md");
+        let new = temp_path("new.md");
+        std::fs::write(&old, "x").unwrap();
+        std::fs::write(&new, "y").unwrap();
+        let old_key = canonical_buffer_id(&old);
+        let reg = BufferRegistry::default();
+        insert_buffer(&reg, &old_key, &old, "jid", "body", 5, 0, 0);
+
+        let (new_key, version) = rekey_buffer(&reg, &old, &new, "jid", "body").unwrap();
+
+        assert_eq!(version, 5);
+        let map = reg.lock();
+        assert!(map.get(&old_key).is_none(), "old key removed");
+        let b = map.get(&new_key).unwrap();
+        assert_eq!(b.file_path, new);
+        assert_eq!(b.last_saved_version, 5, "marked clean after rekey");
+        drop(map);
+        let _ = std::fs::remove_file(&old);
+        let _ = std::fs::remove_file(&new);
+    }
+}

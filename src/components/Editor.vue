@@ -6,13 +6,11 @@ import { markdown } from "@codemirror/lang-markdown";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { search, searchKeymap, highlightSelectionMatches } from "@codemirror/search";
-import { debounce } from "lodash-es";
-import { saveFile } from "../composables/useFiles";
+import { getBuffer, updateBuffer } from "../composables/useFiles";
 
 const props = defineProps<{
   filePath: string | null;
-  janaId: string | null;
-  content: string;
+  bufferId: string | null;
 }>();
 
 const emit = defineEmits<{
@@ -22,20 +20,70 @@ const emit = defineEmits<{
 const editorRef = ref<HTMLDivElement>();
 const saveStatus = ref<"saved" | "saving" | "idle">("idle");
 let editorView: EditorView | null = null;
+let currentBufferId: string | null = null;
 let currentFilePath: string | null = null;
-let currentJanaId: string | null = null;
 
-const debouncedSave = debounce(async (filePath: string, janaId: string, content: string) => {
-  saveStatus.value = "saving";
-  try {
-    await saveFile(filePath, janaId, content);
-    saveStatus.value = "saved";
-    emit("dirty-change", filePath, false);
-  } catch (e) {
-    console.error("Save failed:", e);
-    saveStatus.value = "idle";
+// Optimistic version the editor believes the buffer is at. Seeded from get_buffer
+// on load and advanced by each accepted update_buffer ack.
+let localVersion = 0;
+// Single-flight push: only one update_buffer is in flight at a time; the newest
+// content is coalesced into `pending` and sent next. This keeps base_version in
+// order and avoids hammering IPC on every keystroke.
+let inFlight = false;
+let pending: string | null = null;
+// Guards the doc-replace we do on conflict resync so it isn't treated as an edit.
+let applyingRemote = false;
+
+function flushUpdate() {
+  if (pending === null || !currentBufferId) {
+    inFlight = false;
+    return;
   }
-}, 2000);
+  const content = pending;
+  pending = null;
+  inFlight = true;
+  const base = localVersion;
+  localVersion = base + 1;
+  saveStatus.value = "saving";
+  updateBuffer(currentBufferId, content, base)
+    .then((r) => {
+      if (r.conflict) {
+        // Backend is ahead — adopt its version and content.
+        localVersion = r.version;
+        if (r.content !== null) reloadContent(r.content);
+      } else {
+        localVersion = r.version;
+      }
+    })
+    .catch((e) => {
+      console.error("update_buffer failed:", e);
+      localVersion = base; // allow the next attempt to retry from the right base
+    })
+    .finally(() => {
+      inFlight = false;
+      if (pending !== null) {
+        flushUpdate();
+      } else {
+        saveStatus.value = "saved";
+        if (currentFilePath) emit("dirty-change", currentFilePath, false);
+      }
+    });
+}
+
+function scheduleUpdate(content: string) {
+  pending = content;
+  if (currentFilePath) emit("dirty-change", currentFilePath, true);
+  if (!inFlight) flushUpdate();
+}
+
+function reloadContent(content: string) {
+  if (!editorView) return;
+  applyingRemote = true;
+  editorView.dispatch({
+    changes: { from: 0, to: editorView.state.doc.length, insert: content },
+  });
+  applyingRemote = false;
+}
 
 function createEditor(content: string) {
   if (editorView) {
@@ -54,10 +102,10 @@ function createEditor(content: string) {
       markdown(),
       oneDark,
       EditorView.updateListener.of((update) => {
-        if (update.docChanged && currentFilePath && currentJanaId) {
+        if (!update.docChanged || applyingRemote) return;
+        if (currentBufferId) {
           saveStatus.value = "idle";
-          emit("dirty-change", currentFilePath, true);
-          debouncedSave(currentFilePath, currentJanaId, update.state.doc.toString());
+          scheduleUpdate(update.state.doc.toString());
         }
       }),
       EditorView.theme({
@@ -74,36 +122,28 @@ function createEditor(content: string) {
   });
 }
 
-function loadFile(filePath: string, janaId: string, content: string) {
+async function loadBuffer(bufferId: string, filePath: string) {
+  currentBufferId = bufferId;
   currentFilePath = filePath;
-  currentJanaId = janaId;
+  pending = null;
+  inFlight = false;
   saveStatus.value = "idle";
-  createEditor(content);
-}
-
-// Save on window blur
-function onBlur() {
-  if (currentFilePath && editorView) {
-    debouncedSave.flush();
-  }
-}
-
-onMounted(() => {
-  window.addEventListener("blur", onBlur);
-  if (!props.filePath) {
+  try {
+    const snap = await getBuffer(bufferId);
+    localVersion = snap.version;
+    createEditor(snap.content);
+  } catch (e) {
+    console.error("get_buffer failed:", e);
+    localVersion = 0;
     createEditor("");
   }
-});
+}
 
-onUnmounted(() => {
-  window.removeEventListener("blur", onBlur);
-  debouncedSave.cancel();
-  editorView?.destroy();
-});
-
-function immediatelySave() {
-  if (currentFilePath && currentJanaId && editorView) {
-    debouncedSave.flush();
+// Push any pending edit to the backend immediately and resolve once it lands.
+async function immediatelySave(): Promise<void> {
+  if (pending !== null && !inFlight) flushUpdate();
+  while (inFlight || pending !== null) {
+    await new Promise((r) => setTimeout(r, 10));
   }
 }
 
@@ -113,16 +153,35 @@ function getContent(): string {
 
 defineExpose({ immediatelySave, getContent });
 
+// Flush pending edits to the backend on window blur.
+function onBlur() {
+  if (pending !== null && !inFlight) flushUpdate();
+}
+
+onMounted(() => {
+  window.addEventListener("blur", onBlur);
+  if (props.bufferId && props.filePath) {
+    loadBuffer(props.bufferId, props.filePath);
+  } else {
+    createEditor("");
+  }
+});
+
+onUnmounted(() => {
+  window.removeEventListener("blur", onBlur);
+  editorView?.destroy();
+});
+
 watch(
-  () => props.filePath,
-  (newPath) => {
-    // Flush any pending save for previous file
-    debouncedSave.flush();
-    if (newPath && props.janaId) {
-      loadFile(newPath, props.janaId, props.content);
+  () => props.bufferId,
+  (newBufferId) => {
+    if (newBufferId && props.filePath) {
+      loadBuffer(newBufferId, props.filePath);
     } else {
+      currentBufferId = null;
       currentFilePath = null;
-      currentJanaId = null;
+      pending = null;
+      inFlight = false;
       createEditor("");
     }
   }

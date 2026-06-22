@@ -1,12 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
 
-export interface OpenFileResult {
-  file_path: string;
-  jana_id: string;
-  content: string;
-  file_name: string;
-}
-
 export interface TabResult {
   tab_id: string;
   window_id: string;
@@ -28,6 +21,31 @@ export interface TabEntry {
   last_opened: number;
 }
 
+export interface AcquireResult {
+  buffer_id: string;
+  jana_id: string;
+  content: string;
+  version: number;
+  file_name: string;
+}
+
+export interface BufferSnapshot {
+  jana_id: string;
+  content: string;
+  version: number;
+}
+
+export interface UpdateResult {
+  version: number;
+  conflict: boolean;
+  content: string | null;
+}
+
+export interface SaveAsResult {
+  file_path: string;
+  buffer_id: string;
+}
+
 export async function openFileDialog(windowId: string): Promise<TabResult | null> {
   return invoke<TabResult | null>("open_file_dialog", { windowId });
 }
@@ -38,10 +56,6 @@ export async function addTab(windowId: string, filePath: string): Promise<TabRes
 
 export async function createNewFile(windowId: string): Promise<TabResult> {
   return invoke<TabResult>("create_new_file", { windowId });
-}
-
-export async function readFile(filePath: string): Promise<OpenFileResult> {
-  return invoke<OpenFileResult>("read_file", { filePath });
 }
 
 export async function listTabs(windowId: string): Promise<TabEntry[]> {
@@ -61,21 +75,11 @@ export async function updateTabView(
   return invoke("update_tab_view", { tabId, cursorLine, cursorCol, scrollTop });
 }
 
-export async function saveFile(
-  filePath: string,
-  janaId: string,
-  content: string
-): Promise<void> {
-  return invoke("save_file", { filePath, janaId, content });
-}
-
 export async function saveTempFileAs(
   tabId: string,
-  filePath: string,
-  janaId: string,
-  content: string
-): Promise<string | null> {
-  return invoke<string | null>("save_temp_file_as", { tabId, filePath, janaId, content });
+  filePath: string
+): Promise<SaveAsResult | null> {
+  return invoke<SaveAsResult | null>("save_temp_file_as", { tabId, filePath });
 }
 
 export async function forkFile(filePath: string): Promise<string> {
@@ -88,4 +92,26 @@ export async function clearAiHistory(janaId: string): Promise<void> {
 
 export async function revealInFinder(filePath: string): Promise<void> {
   return invoke("reveal_in_finder", { filePath });
+}
+
+// --- Buffer registry (backend is the content authority + single disk writer) ---
+
+export async function acquireBuffer(filePath: string): Promise<AcquireResult> {
+  return invoke<AcquireResult>("acquire_buffer", { filePath });
+}
+
+export async function getBuffer(bufferId: string): Promise<BufferSnapshot> {
+  return invoke<BufferSnapshot>("get_buffer", { bufferId });
+}
+
+export async function updateBuffer(
+  bufferId: string,
+  content: string,
+  baseVersion: number
+): Promise<UpdateResult> {
+  return invoke<UpdateResult>("update_buffer", { bufferId, content, baseVersion });
+}
+
+export async function releaseBuffer(bufferId: string): Promise<void> {
+  return invoke("release_buffer", { bufferId });
 }

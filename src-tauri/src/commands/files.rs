@@ -5,16 +5,9 @@ use tauri::State;
 use tauri_plugin_dialog::DialogExt;
 use uuid::Uuid;
 
+use crate::buffers::{self, BufferRegistry};
 use crate::db::{dirs_next, DbState};
 use crate::frontmatter;
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct OpenFileResult {
-    pub file_path: String,
-    pub jana_id: String,
-    pub content: String,
-    pub file_name: String,
-}
 
 /// Result of opening/creating a tab: the viewport identity plus the file content
 /// to display in it.
@@ -26,6 +19,14 @@ pub struct TabResult {
     pub jana_id: String,
     pub content: String,
     pub file_name: String,
+}
+
+/// Result of a Save As: the new path plus the re-keyed buffer id the editor
+/// should switch to.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SaveAsResult {
+    pub file_path: String,
+    pub buffer_id: String,
 }
 
 /// A persisted tab row (session state), without file content.
@@ -210,25 +211,6 @@ pub async fn add_tab(
     add_or_get_tab(&state.pool, &window_id, &file_path).await
 }
 
-/// Pure content read — no session writes. Used to hydrate tabs on session restore.
-#[tauri::command]
-pub async fn read_file(file_path: String) -> Result<OpenFileResult, String> {
-    let (jana_id, content) = frontmatter::ensure_jana_id(&file_path)?;
-    let file_name = file_name_from_path(&file_path);
-    Ok(OpenFileResult {
-        file_path,
-        jana_id,
-        content,
-        file_name,
-    })
-}
-
-#[tauri::command]
-pub async fn save_file(file_path: String, jana_id: String, content: String) -> Result<(), String> {
-    let full = frontmatter::compose_with_frontmatter(&jana_id, &content);
-    std::fs::write(&file_path, &full).map_err(|e| format!("Failed to save file: {}", e))
-}
-
 #[tauri::command]
 pub async fn list_tabs(
     window_id: String,
@@ -307,7 +289,11 @@ pub async fn update_tab_view(
 }
 
 #[tauri::command]
-pub async fn fork_file(file_path: String, state: State<'_, DbState>) -> Result<String, String> {
+pub async fn fork_file(
+    file_path: String,
+    state: State<'_, DbState>,
+    registry: State<'_, BufferRegistry>,
+) -> Result<String, String> {
     let new_id = Uuid::new_v4().to_string();
 
     // Read current content (stripping old frontmatter)
@@ -318,6 +304,10 @@ pub async fn fork_file(file_path: String, state: State<'_, DbState>) -> Result<S
     // Write back with new jana_id
     let full = frontmatter::compose_with_frontmatter(&new_id, &parsed.content);
     std::fs::write(&file_path, &full).map_err(|e| format!("Failed to write file: {}", e))?;
+
+    // Keep the loaded buffer's identity in sync, or the flush loop would overwrite
+    // the file with the old jana_id.
+    buffers::set_buffer_jana_id(&registry, &file_path, &new_id);
 
     // Update every tab pointing at this file (identity is per-file, not per-tab).
     sqlx::query("UPDATE open_tabs SET jana_id = ? WHERE file_path = ?")
@@ -380,10 +370,14 @@ pub async fn save_temp_file_as(
     app: tauri::AppHandle,
     tab_id: String,
     file_path: String,
-    jana_id: String,
-    content: String,
     state: State<'_, DbState>,
-) -> Result<Option<String>, String> {
+    registry: State<'_, BufferRegistry>,
+) -> Result<Option<SaveAsResult>, String> {
+    // Content is owned by the backend buffer (authoritative for active and
+    // inactive tabs alike). The active editor flushes pending edits before calling.
+    let (jana_id, content) = buffers::buffer_content(&registry, &file_path)
+        .ok_or("No loaded buffer for this file")?;
+
     let picked = app
         .dialog()
         .file()
@@ -412,6 +406,11 @@ pub async fn save_temp_file_as(
         .await
         .map_err(|e| e.to_string())?;
 
+    // Re-key the buffer (temp path → real path) before the old file may be removed.
+    let buffer_id = buffers::rekey_buffer(&registry, &file_path, &new_path, &jana_id, &content)
+        .map(|(id, _version)| id)
+        .unwrap_or_else(|| buffers::canonical_buffer_id(&new_path));
+
     // Remove the old temp file only if no other tab still references it.
     if is_temp_file(&file_path) {
         let others: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM open_tabs WHERE file_path = ?")
@@ -424,5 +423,8 @@ pub async fn save_temp_file_as(
         }
     }
 
-    Ok(Some(new_path))
+    Ok(Some(SaveAsResult {
+        file_path: new_path,
+        buffer_id,
+    }))
 }
