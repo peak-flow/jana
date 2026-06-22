@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from "vue";
+import { ref, computed, onMounted, onUnmounted } from "vue";
 import Sidebar from "./components/Sidebar.vue";
 import Editor from "./components/Editor.vue";
 import SummaryPanel from "./components/SummaryPanel.vue";
@@ -7,31 +7,42 @@ import SettingsModal from "./components/SettingsModal.vue";
 import {
   openFileDialog,
   readFile,
-  closeFile,
-  listOpenFiles,
+  listTabs,
+  closeTab,
   forkFile,
   clearAiHistory,
   revealInFinder,
   createNewFile,
   saveTempFileAs,
-  type OpenFileResult,
+  type TabResult,
 } from "./composables/useFiles";
 
-export interface ActiveFile {
+export interface TabView {
+  tabId: string;
   filePath: string;
   janaId: string;
   fileName: string;
   content: string;
 }
 
-const activeFile = ref<ActiveFile | null>(null);
-const openFiles = ref<ActiveFile[]>([]);
+// Each window owns its own tabs. The first window has no `?window_id=` and
+// falls back to "main", matching the migrated default window.
+const windowId = new URLSearchParams(location.search).get("window_id") ?? "main";
+
+const tabs = ref<TabView[]>([]);
+const activeTabId = ref<string | null>(null);
+// Dirty state is keyed by file path; within a single window each path maps to
+// exactly one tab, so this stays 1:1 with the open tabs.
 const dirtyFiles = ref<Set<string>>(new Set());
 const showSettings = ref(false);
 const editorRef = ref<InstanceType<typeof Editor> | null>(null);
 const sidebarWidth = ref(200);
 const isResizing = ref(false);
 const showSummaryPanel = ref(true);
+
+const activeTab = computed(
+  () => tabs.value.find((t) => t.tabId === activeTabId.value) ?? null
+);
 
 function onResizeStart(e: MouseEvent) {
   e.preventDefault();
@@ -61,59 +72,61 @@ function onDirtyChange(filePath: string, isDirty: boolean) {
 
 async function handleOpenFile() {
   try {
-    const result = await openFileDialog();
+    const result = await openFileDialog(windowId);
     if (!result) return;
-    addFileToList(result);
+    addTabToList(result);
   } catch (e) {
     console.error("Failed to open file:", e);
   }
 }
 
-function addFileToList(result: OpenFileResult) {
-  // Check if already open
-  const existing = openFiles.value.find((f) => f.filePath === result.file_path);
+function addTabToList(result: TabResult) {
+  // Backend dedups by (window_id, file_path), so reopening a file returns its
+  // existing tab_id — just activate it instead of pushing a duplicate.
+  const existing = tabs.value.find((t) => t.tabId === result.tab_id);
   if (existing) {
-    activeFile.value = existing;
+    activeTabId.value = existing.tabId;
     return;
   }
 
-  const file: ActiveFile = {
+  const tab: TabView = {
+    tabId: result.tab_id,
     filePath: result.file_path,
     janaId: result.jana_id,
     fileName: result.file_name,
     content: result.content,
   };
-  openFiles.value.push(file);
-  activeFile.value = file;
+  tabs.value.push(tab);
+  activeTabId.value = tab.tabId;
 }
 
-function onSelectFile(filePath: string) {
-  const file = openFiles.value.find((f) => f.filePath === filePath);
-  if (file) {
-    activeFile.value = file;
-  }
+function onSelectTab(tabId: string) {
+  activeTabId.value = tabId;
 }
 
-async function onCloseFile(filePath: string) {
+async function onCloseTab(tabId: string) {
+  const tab = tabs.value.find((t) => t.tabId === tabId);
   try {
-    await closeFile(filePath);
+    await closeTab(tabId);
   } catch (e) {
-    console.error("Failed to close file:", e);
+    console.error("Failed to close tab:", e);
   }
-  openFiles.value = openFiles.value.filter((f) => f.filePath !== filePath);
-  dirtyFiles.value.delete(filePath);
-  dirtyFiles.value = new Set(dirtyFiles.value);
-  if (activeFile.value?.filePath === filePath) {
-    activeFile.value = openFiles.value.length > 0 ? openFiles.value[0] : null;
+  tabs.value = tabs.value.filter((t) => t.tabId !== tabId);
+  if (tab) {
+    dirtyFiles.value.delete(tab.filePath);
+    dirtyFiles.value = new Set(dirtyFiles.value);
+  }
+  if (activeTabId.value === tabId) {
+    activeTabId.value = tabs.value.length > 0 ? tabs.value[0].tabId : null;
   }
 }
 
 async function onForkFile(filePath: string) {
   try {
     const newJanaId = await forkFile(filePath);
-    const file = openFiles.value.find((f) => f.filePath === filePath);
-    if (file) {
-      file.janaId = newJanaId;
+    // Identity is per-file: update every tab pointing at this path.
+    for (const t of tabs.value) {
+      if (t.filePath === filePath) t.janaId = newJanaId;
     }
   } catch (e) {
     console.error("Failed to fork file:", e);
@@ -138,32 +151,33 @@ async function onRevealInFinder(filePath: string) {
 
 async function handleNewFile() {
   try {
-    const result = await createNewFile();
-    addFileToList(result);
+    const result = await createNewFile(windowId);
+    addTabToList(result);
   } catch (e) {
     console.error("Failed to create new file:", e);
   }
 }
 
-async function handleSaveAs(filePath: string) {
+async function handleSaveAs(tabId: string) {
   try {
-    const file = openFiles.value.find((f) => f.filePath === filePath);
-    if (!file) return;
-    // Flush editor if this is the active file
-    const isActive = activeFile.value?.filePath === filePath;
+    const tab = tabs.value.find((t) => t.tabId === tabId);
+    if (!tab) return;
+    // Flush editor if this is the active tab, then grab its current content.
+    const isActive = activeTabId.value === tabId;
     if (isActive) {
       editorRef.value?.immediatelySave();
     }
     const content = isActive
-      ? (editorRef.value?.getContent() ?? file.content)
-      : file.content;
-    const newPath = await saveTempFileAs(filePath, file.janaId, content);
+      ? (editorRef.value?.getContent() ?? tab.content)
+      : tab.content;
+    const newPath = await saveTempFileAs(tabId, tab.filePath, tab.janaId, content);
     if (!newPath) return;
-    file.filePath = newPath;
-    file.fileName = newPath.split("/").pop() ?? newPath;
-    if (isActive) {
-      activeFile.value = file;
-    }
+    // The file moved temp → real: update the tab and clear its dirty marker.
+    dirtyFiles.value.delete(tab.filePath);
+    tab.filePath = newPath;
+    tab.fileName = newPath.split("/").pop() ?? newPath;
+    tab.content = content;
+    dirtyFiles.value = new Set(dirtyFiles.value);
   } catch (e) {
     console.error("Failed to save as:", e);
   }
@@ -182,15 +196,13 @@ function handleKeydown(e: KeyboardEvent) {
     handleOpenFile();
   } else if ((e.key === "s" || e.key === "S") && e.shiftKey) {
     e.preventDefault();
-    if (activeFile.value) handleSaveAs(activeFile.value.filePath);
+    if (activeTabId.value) handleSaveAs(activeTabId.value);
   } else if (e.key === "s") {
     e.preventDefault();
     editorRef.value?.immediatelySave();
   } else if (e.key === "w") {
     e.preventDefault();
-    if (activeFile.value) {
-      onCloseFile(activeFile.value.filePath);
-    }
+    if (activeTabId.value) onCloseTab(activeTabId.value);
   }
 }
 
@@ -202,26 +214,27 @@ onUnmounted(() => {
   window.removeEventListener("keydown", handleKeydown);
 });
 
-// Session restore
+// Session restore — load this window's tabs and hydrate each with file content.
 onMounted(async () => {
   try {
-    const entries = await listOpenFiles();
+    const entries = await listTabs(windowId);
     for (const entry of entries.sort((a, b) => a.tab_order - b.tab_order)) {
       try {
         const result = await readFile(entry.file_path);
-        openFiles.value.push({
+        tabs.value.push({
+          tabId: entry.tab_id,
           filePath: result.file_path,
           janaId: result.jana_id,
           fileName: result.file_name,
           content: result.content,
         });
       } catch {
-        // File no longer exists — clean up
-        await closeFile(entry.file_path).catch(() => {});
+        // File no longer exists on disk — drop the stale tab.
+        await closeTab(entry.tab_id).catch(() => {});
       }
     }
-    if (openFiles.value.length > 0) {
-      activeFile.value = openFiles.value[0];
+    if (tabs.value.length > 0) {
+      activeTabId.value = tabs.value[0].tabId;
     }
   } catch (e) {
     console.error("Session restore failed:", e);
@@ -232,14 +245,14 @@ onMounted(async () => {
 <template>
   <div class="app-layout" :class="{ resizing: isResizing }">
     <Sidebar
-      :open-files="openFiles"
-      :active-file-path="activeFile?.filePath ?? null"
+      :tabs="tabs"
+      :active-tab-id="activeTabId"
       :dirty-files="dirtyFiles"
       :style="{ width: sidebarWidth + 'px', minWidth: sidebarWidth + 'px' }"
       @new-file="handleNewFile"
       @open-file="handleOpenFile"
-      @select-file="onSelectFile"
-      @close-file="onCloseFile"
+      @select-tab="onSelectTab"
+      @close-tab="onCloseTab"
       @fork-file="onForkFile"
       @clear-history="onClearHistory"
       @reveal-in-finder="onRevealInFinder"
@@ -249,9 +262,9 @@ onMounted(async () => {
     <div class="resize-handle" @mousedown="onResizeStart" />
     <Editor
       ref="editorRef"
-      :file-path="activeFile?.filePath ?? null"
-      :jana-id="activeFile?.janaId ?? null"
-      :content="activeFile?.content ?? ''"
+      :file-path="activeTab?.filePath ?? null"
+      :jana-id="activeTab?.janaId ?? null"
+      :content="activeTab?.content ?? ''"
       @dirty-change="onDirtyChange"
     />
     <button class="panel-toggle" @click="showSummaryPanel = !showSummaryPanel" :title="showSummaryPanel ? 'Hide AI panel' : 'Show AI panel'">
@@ -259,8 +272,8 @@ onMounted(async () => {
     </button>
     <SummaryPanel
       v-show="showSummaryPanel"
-      :jana-id="activeFile?.janaId ?? null"
-      :file-path="activeFile?.filePath ?? null"
+      :jana-id="activeTab?.janaId ?? null"
+      :file-path="activeTab?.filePath ?? null"
     />
     <SettingsModal v-if="showSettings" @close="showSettings = false" />
   </div>

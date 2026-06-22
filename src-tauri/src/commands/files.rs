@@ -1,11 +1,11 @@
 use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
+use sqlx::{FromRow, SqlitePool};
 use std::path::Path;
 use tauri::State;
 use tauri_plugin_dialog::DialogExt;
 use uuid::Uuid;
 
-use crate::db::{DbState, dirs_next};
+use crate::db::{dirs_next, DbState};
 use crate::frontmatter;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -16,13 +16,29 @@ pub struct OpenFileResult {
     pub file_name: String,
 }
 
+/// Result of opening/creating a tab: the viewport identity plus the file content
+/// to display in it.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TabResult {
+    pub tab_id: String,
+    pub window_id: String,
+    pub file_path: String,
+    pub jana_id: String,
+    pub content: String,
+    pub file_name: String,
+}
+
+/// A persisted tab row (session state), without file content.
 #[derive(Debug, Serialize, Deserialize, FromRow)]
-pub struct OpenFileEntry {
+pub struct TabEntry {
+    pub tab_id: String,
+    pub window_id: String,
     pub file_path: String,
     pub jana_id: String,
     pub tab_order: i32,
     pub cursor_line: i32,
     pub cursor_col: i32,
+    pub scroll_top: i32,
     pub last_opened: i64,
 }
 
@@ -50,123 +66,155 @@ fn file_name_from_path(path: &str) -> String {
         .to_string()
 }
 
-#[tauri::command]
-pub async fn create_new_file(
-    state: State<'_, DbState>,
-) -> Result<OpenFileResult, String> {
-    let td = temp_dir()?;
-
-    // Find next available "Untitled N.md"
-    let mut n = 1u32;
-    loop {
-        let name = format!("Untitled {}.md", n);
-        let path = td.join(&name);
-        if !path.exists() {
-            break;
-        }
-        n += 1;
-    }
-
-    let file_name = format!("Untitled {}.md", n);
-    let file_path = td.join(&file_name).to_string_lossy().to_string();
-    let jana_id = Uuid::new_v4().to_string();
-
-    // Write empty file with frontmatter
-    let full = frontmatter::compose_with_frontmatter(&jana_id, "");
-    std::fs::write(&file_path, &full)
-        .map_err(|e| format!("Failed to create temp file: {}", e))?;
-
+/// Ensure an `app_windows` row exists for this window. Covers fresh installs (no
+/// legacy session to migrate) and any window created after the one-time migration.
+async fn ensure_window(pool: &SqlitePool, window_id: &str) -> Result<(), String> {
     let now = chrono::Utc::now().timestamp();
-
-    // Add to open_files
+    let label = if window_id == "main" { "Main" } else { window_id };
     sqlx::query(
-        "INSERT OR REPLACE INTO open_files (file_path, jana_id, tab_order, cursor_line, cursor_col, last_opened)
-         VALUES (?, ?, (SELECT COALESCE(MAX(tab_order), 0) + 1 FROM open_files), 1, 1, ?)"
+        "INSERT OR IGNORE INTO app_windows (window_id, label, active_tab_id, created_at, last_focused)
+         VALUES (?, ?, NULL, ?, ?)",
     )
-    .bind(&file_path)
-    .bind(&jana_id)
+    .bind(window_id)
+    .bind(label)
     .bind(now)
-    .execute(&state.pool)
+    .bind(now)
+    .execute(pool)
     .await
     .map_err(|e| e.to_string())?;
+    Ok(())
+}
 
-    Ok(OpenFileResult {
-        file_path,
+/// Open `file_path` as a tab in `window_id`, returning its content. If the file is
+/// already open in this window, the existing tab is reused so we never create a
+/// duplicate tab for the same file within one window.
+async fn add_or_get_tab(
+    pool: &SqlitePool,
+    window_id: &str,
+    file_path: &str,
+) -> Result<TabResult, String> {
+    let (jana_id, content) = frontmatter::ensure_jana_id(file_path)?;
+    let file_name = file_name_from_path(file_path);
+    let now = chrono::Utc::now().timestamp();
+
+    ensure_window(pool, window_id).await?;
+
+    let existing: Option<String> =
+        sqlx::query_scalar("SELECT tab_id FROM open_tabs WHERE window_id = ? AND file_path = ?")
+            .bind(window_id)
+            .bind(file_path)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| e.to_string())?;
+
+    let tab_id = match existing {
+        Some(tid) => {
+            // Disk is authoritative for jana_id (it may have changed via fork).
+            sqlx::query("UPDATE open_tabs SET jana_id = ?, last_opened = ? WHERE tab_id = ?")
+                .bind(&jana_id)
+                .bind(now)
+                .bind(&tid)
+                .execute(pool)
+                .await
+                .map_err(|e| e.to_string())?;
+            tid
+        }
+        None => {
+            let tid = Uuid::new_v4().to_string();
+            sqlx::query(
+                "INSERT INTO open_tabs
+                 (tab_id, window_id, file_path, jana_id, tab_order, cursor_line, cursor_col, scroll_top, last_opened)
+                 VALUES (?, ?, ?, ?, (SELECT COALESCE(MAX(tab_order), -1) + 1 FROM open_tabs WHERE window_id = ?), 1, 1, 0, ?)",
+            )
+            .bind(&tid)
+            .bind(window_id)
+            .bind(file_path)
+            .bind(&jana_id)
+            .bind(window_id)
+            .bind(now)
+            .execute(pool)
+            .await
+            .map_err(|e| e.to_string())?;
+            tid
+        }
+    };
+
+    Ok(TabResult {
+        tab_id,
+        window_id: window_id.to_string(),
+        file_path: file_path.to_string(),
         jana_id,
-        content: String::new(),
+        content,
         file_name,
     })
 }
 
 #[tauri::command]
+pub async fn create_new_file(
+    window_id: String,
+    state: State<'_, DbState>,
+) -> Result<TabResult, String> {
+    let td = temp_dir()?;
+
+    // Find next available "Untitled N.md"
+    let mut n = 1u32;
+    let file_path = loop {
+        let name = format!("Untitled {}.md", n);
+        let path = td.join(&name);
+        if !path.exists() {
+            break path.to_string_lossy().to_string();
+        }
+        n += 1;
+    };
+
+    let jana_id = Uuid::new_v4().to_string();
+    let full = frontmatter::compose_with_frontmatter(&jana_id, "");
+    std::fs::write(&file_path, &full)
+        .map_err(|e| format!("Failed to create temp file: {}", e))?;
+
+    // A freshly-named temp file is always new, so this creates a new tab.
+    add_or_get_tab(&state.pool, &window_id, &file_path).await
+}
+
+#[tauri::command]
 pub async fn open_file_dialog(
     app: tauri::AppHandle,
+    window_id: String,
     state: State<'_, DbState>,
-) -> Result<Option<OpenFileResult>, String> {
-    let file_path = app
+) -> Result<Option<TabResult>, String> {
+    let picked = app
         .dialog()
         .file()
         .add_filter("Text Files", &["md", "txt", "markdown"])
         .add_filter("All Files", &["*"])
         .blocking_pick_file();
 
-    let file_path = match file_path {
-        Some(fp) => fp.into_path()
+    let file_path = match picked {
+        Some(fp) => fp
+            .into_path()
             .map_err(|e| format!("Invalid file path: {:?}", e))?
             .to_string_lossy()
             .to_string(),
         None => return Ok(None),
     };
 
-    let (jana_id, content) = frontmatter::ensure_jana_id(&file_path)?;
-    let file_name = file_name_from_path(&file_path);
-    let now = chrono::Utc::now().timestamp();
-
-    // Upsert into open_files
-    sqlx::query(
-        "INSERT OR REPLACE INTO open_files (file_path, jana_id, tab_order, cursor_line, cursor_col, last_opened)
-         VALUES (?, ?, COALESCE((SELECT tab_order FROM open_files WHERE file_path = ?), (SELECT COALESCE(MAX(tab_order), 0) + 1 FROM open_files)), 1, 1, ?)"
-    )
-    .bind(&file_path)
-    .bind(&jana_id)
-    .bind(&file_path)
-    .bind(now)
-    .execute(&state.pool)
-    .await
-    .map_err(|e| e.to_string())?;
-
-    Ok(Some(OpenFileResult {
-        file_path,
-        jana_id,
-        content,
-        file_name,
-    }))
+    Ok(Some(add_or_get_tab(&state.pool, &window_id, &file_path).await?))
 }
 
 #[tauri::command]
-pub async fn read_file(
+pub async fn add_tab(
+    window_id: String,
     file_path: String,
     state: State<'_, DbState>,
-) -> Result<OpenFileResult, String> {
+) -> Result<TabResult, String> {
+    add_or_get_tab(&state.pool, &window_id, &file_path).await
+}
+
+/// Pure content read — no session writes. Used to hydrate tabs on session restore.
+#[tauri::command]
+pub async fn read_file(file_path: String) -> Result<OpenFileResult, String> {
     let (jana_id, content) = frontmatter::ensure_jana_id(&file_path)?;
     let file_name = file_name_from_path(&file_path);
-    let now = chrono::Utc::now().timestamp();
-
-    // Update open_files entry
-    sqlx::query(
-        "INSERT OR REPLACE INTO open_files (file_path, jana_id, tab_order, cursor_line, cursor_col, last_opened)
-         VALUES (?, ?, COALESCE((SELECT tab_order FROM open_files WHERE file_path = ?), (SELECT COALESCE(MAX(tab_order), 0) + 1 FROM open_files)), COALESCE((SELECT cursor_line FROM open_files WHERE file_path = ?), 1), COALESCE((SELECT cursor_col FROM open_files WHERE file_path = ?), 1), ?)"
-    )
-    .bind(&file_path)
-    .bind(&jana_id)
-    .bind(&file_path)
-    .bind(&file_path)
-    .bind(&file_path)
-    .bind(now)
-    .execute(&state.pool)
-    .await
-    .map_err(|e| e.to_string())?;
-
     Ok(OpenFileResult {
         file_path,
         jana_id,
@@ -176,114 +224,90 @@ pub async fn read_file(
 }
 
 #[tauri::command]
-pub async fn save_file(
-    file_path: String,
-    jana_id: String,
-    content: String,
-) -> Result<(), String> {
+pub async fn save_file(file_path: String, jana_id: String, content: String) -> Result<(), String> {
     let full = frontmatter::compose_with_frontmatter(&jana_id, &content);
-    std::fs::write(&file_path, &full)
-        .map_err(|e| format!("Failed to save file: {}", e))
+    std::fs::write(&file_path, &full).map_err(|e| format!("Failed to save file: {}", e))
 }
 
 #[tauri::command]
-pub async fn save_file_as(
-    app: tauri::AppHandle,
-    jana_id: String,
-    content: String,
+pub async fn list_tabs(
+    window_id: String,
     state: State<'_, DbState>,
-) -> Result<Option<String>, String> {
-    let file_path = app
-        .dialog()
-        .file()
-        .add_filter("Markdown", &["md"])
-        .add_filter("Text", &["txt"])
-        .blocking_save_file();
-
-    let file_path = match file_path {
-        Some(fp) => fp.into_path()
-            .map_err(|e| format!("Invalid file path: {:?}", e))?
-            .to_string_lossy()
-            .to_string(),
-        None => return Ok(None),
-    };
-
-    let full = frontmatter::compose_with_frontmatter(&jana_id, &content);
-    std::fs::write(&file_path, &full)
-        .map_err(|e| format!("Failed to save file: {}", e))?;
-
-    let now = chrono::Utc::now().timestamp();
-
-    // Add to open_files
-    sqlx::query(
-        "INSERT OR REPLACE INTO open_files (file_path, jana_id, tab_order, cursor_line, cursor_col, last_opened)
-         VALUES (?, ?, (SELECT COALESCE(MAX(tab_order), 0) + 1 FROM open_files), 1, 1, ?)"
+) -> Result<Vec<TabEntry>, String> {
+    sqlx::query_as::<_, TabEntry>(
+        "SELECT tab_id, window_id, file_path, jana_id, tab_order, cursor_line, cursor_col, scroll_top, last_opened
+         FROM open_tabs WHERE window_id = ? ORDER BY tab_order ASC",
     )
-    .bind(&file_path)
-    .bind(&jana_id)
-    .bind(now)
-    .execute(&state.pool)
-    .await
-    .map_err(|e| e.to_string())?;
-
-    Ok(Some(file_path))
-}
-
-#[tauri::command]
-pub async fn close_file(
-    file_path: String,
-    state: State<'_, DbState>,
-) -> Result<(), String> {
-    sqlx::query("DELETE FROM open_files WHERE file_path = ?")
-        .bind(&file_path)
-        .execute(&state.pool)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    // Delete temp files from disk when closed
-    if is_temp_file(&file_path) {
-        let _ = std::fs::remove_file(&file_path);
-    }
-
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn list_open_files(
-    state: State<'_, DbState>,
-) -> Result<Vec<OpenFileEntry>, String> {
-    sqlx::query_as::<_, OpenFileEntry>(
-        "SELECT file_path, jana_id, tab_order, cursor_line, cursor_col, last_opened
-         FROM open_files ORDER BY tab_order ASC"
-    )
+    .bind(&window_id)
     .fetch_all(&state.pool)
     .await
     .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub async fn update_cursor_position(
-    file_path: String,
-    cursor_line: i32,
-    cursor_col: i32,
-    state: State<'_, DbState>,
-) -> Result<(), String> {
-    sqlx::query("UPDATE open_files SET cursor_line = ?, cursor_col = ? WHERE file_path = ?")
-        .bind(cursor_line)
-        .bind(cursor_col)
-        .bind(&file_path)
+pub async fn close_tab(tab_id: String, state: State<'_, DbState>) -> Result<(), String> {
+    let file_path: Option<String> =
+        sqlx::query_scalar("SELECT file_path FROM open_tabs WHERE tab_id = ?")
+            .bind(&tab_id)
+            .fetch_optional(&state.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+
+    sqlx::query("DELETE FROM open_tabs WHERE tab_id = ?")
+        .bind(&tab_id)
         .execute(&state.pool)
         .await
         .map_err(|e| e.to_string())?;
+
+    // Clear the window's active tab pointer if it referenced this tab.
+    sqlx::query("UPDATE app_windows SET active_tab_id = NULL WHERE active_tab_id = ?")
+        .bind(&tab_id)
+        .execute(&state.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Delete a temp file only when no other tab (in any window) still references it.
+    if let Some(fp) = file_path {
+        if is_temp_file(&fp) {
+            let others: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM open_tabs WHERE file_path = ?")
+                    .bind(&fp)
+                    .fetch_one(&state.pool)
+                    .await
+                    .map_err(|e| e.to_string())?;
+            if others == 0 {
+                let _ = std::fs::remove_file(&fp);
+            }
+        }
+    }
 
     Ok(())
 }
 
 #[tauri::command]
-pub async fn fork_file(
-    file_path: String,
+pub async fn update_tab_view(
+    tab_id: String,
+    cursor_line: i32,
+    cursor_col: i32,
+    scroll_top: i32,
     state: State<'_, DbState>,
-) -> Result<String, String> {
+) -> Result<(), String> {
+    sqlx::query(
+        "UPDATE open_tabs SET cursor_line = ?, cursor_col = ?, scroll_top = ? WHERE tab_id = ?",
+    )
+    .bind(cursor_line)
+    .bind(cursor_col)
+    .bind(scroll_top)
+    .bind(&tab_id)
+    .execute(&state.pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn fork_file(file_path: String, state: State<'_, DbState>) -> Result<String, String> {
     let new_id = Uuid::new_v4().to_string();
 
     // Read current content (stripping old frontmatter)
@@ -293,11 +317,10 @@ pub async fn fork_file(
 
     // Write back with new jana_id
     let full = frontmatter::compose_with_frontmatter(&new_id, &parsed.content);
-    std::fs::write(&file_path, &full)
-        .map_err(|e| format!("Failed to write file: {}", e))?;
+    std::fs::write(&file_path, &full).map_err(|e| format!("Failed to write file: {}", e))?;
 
-    // Update open_files with new jana_id
-    sqlx::query("UPDATE open_files SET jana_id = ? WHERE file_path = ?")
+    // Update every tab pointing at this file (identity is per-file, not per-tab).
+    sqlx::query("UPDATE open_tabs SET jana_id = ? WHERE file_path = ?")
         .bind(&new_id)
         .bind(&file_path)
         .execute(&state.pool)
@@ -308,10 +331,7 @@ pub async fn fork_file(
 }
 
 #[tauri::command]
-pub async fn clear_ai_history(
-    jana_id: String,
-    state: State<'_, DbState>,
-) -> Result<(), String> {
+pub async fn clear_ai_history(jana_id: String, state: State<'_, DbState>) -> Result<(), String> {
     sqlx::query("DELETE FROM file_ai_interactions WHERE jana_id = ?")
         .bind(&jana_id)
         .execute(&state.pool)
@@ -358,55 +378,50 @@ pub async fn reveal_in_finder(file_path: String) -> Result<(), String> {
 #[tauri::command]
 pub async fn save_temp_file_as(
     app: tauri::AppHandle,
+    tab_id: String,
     file_path: String,
     jana_id: String,
     content: String,
     state: State<'_, DbState>,
 ) -> Result<Option<String>, String> {
-    let new_path = app
+    let picked = app
         .dialog()
         .file()
         .add_filter("Markdown", &["md"])
         .add_filter("Text", &["txt"])
         .blocking_save_file();
 
-    let new_path = match new_path {
-        Some(fp) => fp.into_path()
+    let new_path = match picked {
+        Some(fp) => fp
+            .into_path()
             .map_err(|e| format!("Invalid file path: {:?}", e))?
             .to_string_lossy()
             .to_string(),
         None => return Ok(None),
     };
 
-    // Write content to new location
+    // Write content to the new location.
     let full = frontmatter::compose_with_frontmatter(&jana_id, &content);
-    std::fs::write(&new_path, &full)
-        .map_err(|e| format!("Failed to save file: {}", e))?;
+    std::fs::write(&new_path, &full).map_err(|e| format!("Failed to save file: {}", e))?;
 
-    // Remove old DB entry
-    sqlx::query("DELETE FROM open_files WHERE file_path = ?")
-        .bind(&file_path)
+    // Re-point this tab at the new path.
+    sqlx::query("UPDATE open_tabs SET file_path = ? WHERE tab_id = ?")
+        .bind(&new_path)
+        .bind(&tab_id)
         .execute(&state.pool)
         .await
         .map_err(|e| e.to_string())?;
 
-    let now = chrono::Utc::now().timestamp();
-
-    // Insert new entry with real path
-    sqlx::query(
-        "INSERT OR REPLACE INTO open_files (file_path, jana_id, tab_order, cursor_line, cursor_col, last_opened)
-         VALUES (?, ?, (SELECT COALESCE(MAX(tab_order), 0) + 1 FROM open_files), 1, 1, ?)"
-    )
-    .bind(&new_path)
-    .bind(&jana_id)
-    .bind(now)
-    .execute(&state.pool)
-    .await
-    .map_err(|e| e.to_string())?;
-
-    // Delete old temp file if it was in temp dir
+    // Remove the old temp file only if no other tab still references it.
     if is_temp_file(&file_path) {
-        let _ = std::fs::remove_file(&file_path);
+        let others: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM open_tabs WHERE file_path = ?")
+            .bind(&file_path)
+            .fetch_one(&state.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        if others == 0 {
+            let _ = std::fs::remove_file(&file_path);
+        }
     }
 
     Ok(Some(new_path))
