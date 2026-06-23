@@ -11,6 +11,7 @@ defineProps<{
 const emit = defineEmits<{
   (e: "open-file"): void;
   (e: "new-file"): void;
+  (e: "new-window"): void;
   (e: "select-tab", tabId: string): void;
   (e: "close-tab", tabId: string): void;
   (e: "open-settings"): void;
@@ -104,6 +105,12 @@ onUnmounted(() => {
           </svg>
         </button>
         <button class="header-btn" @click="emit('new-file')" title="New File (Cmd+N)">+</button>
+        <button class="header-btn" @click="emit('new-window')" title="New Window (Cmd+Shift+N)">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+            <rect x="2" y="2" width="9" height="9" rx="1" stroke="currentColor" stroke-width="1.3"/>
+            <path d="M6 6h7a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V6z" fill="#181825" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+          </svg>
+        </button>
       </div>
     </div>
     <div class="file-list">

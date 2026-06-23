@@ -58,6 +58,11 @@ export async function createNewFile(windowId: string): Promise<TabResult> {
   return invoke<TabResult>("create_new_file", { windowId });
 }
 
+/// Open a brand-new editor window with its own session. Returns the new window_id.
+export async function createAppWindow(): Promise<string> {
+  return invoke<string>("create_app_window");
+}
+
 export async function listTabs(windowId: string): Promise<TabEntry[]> {
   return invoke<TabEntry[]>("list_tabs", { windowId });
 }

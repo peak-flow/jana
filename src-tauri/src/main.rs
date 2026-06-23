@@ -32,6 +32,7 @@ fn main() {
             commands::files::create_new_file,
             commands::files::open_file_dialog,
             commands::files::add_tab,
+            commands::files::create_app_window,
             commands::files::save_temp_file_as,
             commands::files::close_tab,
             commands::files::list_tabs,

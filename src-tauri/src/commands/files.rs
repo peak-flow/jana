@@ -211,6 +211,31 @@ pub async fn add_tab(
     add_or_get_tab(&state.pool, &window_id, &file_path).await
 }
 
+/// Create a new editor window with its own independent session. Mints a fresh
+/// `window_id`, records it in `app_windows`, then opens a webview at
+/// `index.html?window_id=<id>` so the frontend restores only this window's tabs.
+#[tauri::command]
+pub async fn create_app_window(
+    app: tauri::AppHandle,
+    state: State<'_, DbState>,
+) -> Result<String, String> {
+    let window_id = Uuid::new_v4().to_string();
+    ensure_window(&state.pool, &window_id).await?;
+
+    // The label is prefixed so the `win-*` capability glob grants the new window
+    // the same permissions as the main window; the URL carries the bare id that
+    // the frontend reads from `?window_id=`.
+    let label = format!("win-{}", window_id);
+    let url = format!("index.html?window_id={}", window_id);
+    tauri::WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::App(url.into()))
+        .title("Jana")
+        .inner_size(1200.0, 800.0)
+        .build()
+        .map_err(|e| format!("Failed to create window: {}", e))?;
+
+    Ok(window_id)
+}
+
 #[tauri::command]
 pub async fn list_tabs(
     window_id: String,

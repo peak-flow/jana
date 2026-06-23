@@ -14,6 +14,7 @@ import {
   clearAiHistory,
   revealInFinder,
   createNewFile,
+  createAppWindow,
   saveTempFileAs,
   type TabResult,
 } from "./composables/useFiles";
@@ -161,6 +162,16 @@ async function handleNewFile() {
   }
 }
 
+// Open a second editor window. The new window gets its own window_id and restores
+// only its own (initially empty) tab set.
+async function handleNewWindow() {
+  try {
+    await createAppWindow();
+  } catch (e) {
+    console.error("Failed to create window:", e);
+  }
+}
+
 async function handleSaveAs(tabId: string) {
   try {
     const tab = tabs.value.find((t) => t.tabId === tabId);
@@ -188,7 +199,10 @@ function handleKeydown(e: KeyboardEvent) {
   const mod = e.metaKey || e.ctrlKey;
   if (!mod) return;
 
-  if (e.key === "n") {
+  if ((e.key === "n" || e.key === "N") && e.shiftKey) {
+    e.preventDefault();
+    handleNewWindow();
+  } else if (e.key === "n") {
     e.preventDefault();
     handleNewFile();
   } else if (e.key === "o") {
@@ -250,6 +264,7 @@ onMounted(async () => {
       :dirty-files="dirtyFiles"
       :style="{ width: sidebarWidth + 'px', minWidth: sidebarWidth + 'px' }"
       @new-file="handleNewFile"
+      @new-window="handleNewWindow"
       @open-file="handleOpenFile"
       @select-tab="onSelectTab"
       @close-tab="onCloseTab"
