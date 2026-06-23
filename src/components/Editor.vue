@@ -7,7 +7,7 @@ import { oneDark } from "@codemirror/theme-one-dark";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { search, searchKeymap, highlightSelectionMatches } from "@codemirror/search";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { getBuffer, updateBuffer } from "../composables/useFiles";
+import { getBuffer, updateBuffer, flushBuffer } from "../composables/useFiles";
 
 const props = defineProps<{
   filePath: string | null;
@@ -48,6 +48,9 @@ let pendingContent: string | null = null;
 let pendingChanges: ChangeSet | null = null;
 // Guards the doc-replace we do on conflict resync so it isn't treated as an edit.
 let applyingRemote = false;
+// Bumped on every loadBuffer so a stale async load (whose tab has since been
+// switched away) can detect it lost the race and skip mutating editor state.
+let loadGeneration = 0;
 // Active subscription to peer `buffer-updated` broadcasts.
 let unlisten: UnlistenFn | null = null;
 
@@ -56,6 +59,10 @@ function flushUpdate() {
     inFlight = false;
     return;
   }
+  // Capture the buffer this batch belongs to. If the tab is switched mid-flight the
+  // completion handlers must not touch the new buffer's state.
+  const bufferId = currentBufferId;
+  const filePath = currentFilePath;
   const content = pendingContent;
   const changes = pendingChanges;
   pendingContent = null;
@@ -64,27 +71,43 @@ function flushUpdate() {
   const base = localVersion;
   localVersion = base + 1;
   saveStatus.value = "saving";
-  updateBuffer(currentBufferId, content, changes.toJSON(), base, props.windowId)
+  let failed = false;
+  updateBuffer(bufferId, content, changes.toJSON(), base, props.windowId)
     .then((r) => {
-      if (r.conflict) {
-        // Backend is ahead — adopt its version and content.
-        localVersion = r.version;
-        if (r.content !== null) reloadContent(r.content);
-      } else {
-        localVersion = r.version;
-      }
+      if (currentBufferId !== bufferId) return; // switched away — response is stale
+      localVersion = r.version;
+      // Backend is ahead — adopt its authoritative content (OCC resync).
+      if (r.conflict && r.content !== null) reloadContent(r.content);
     })
     .catch((e) => {
       console.error("update_buffer failed:", e);
-      localVersion = base; // allow the next attempt to retry from the right base
+      if (currentBufferId !== bufferId) return; // switched away — drop the stale retry
+      failed = true;
+      localVersion = base; // retry from the right base
+      // Re-queue the unsent batch instead of dropping it. Edits that arrived while
+      // this one was in flight came *after* it, so the failed changes compose first.
+      pendingChanges = pendingChanges ? changes.compose(pendingChanges) : changes;
+      if (pendingContent === null) pendingContent = content;
     })
     .finally(() => {
       inFlight = false;
+      if (currentBufferId !== bufferId) return; // a switch manages its own state
       if (pendingContent !== null) {
-        flushUpdate();
+        // Still dirty — keep the indicator honest and keep trying. Defer the retry
+        // when the last attempt failed so a persistent error can't hot-spin.
+        if (filePath) emit("dirty-change", filePath, true);
+        if (failed) {
+          window.setTimeout(() => {
+            if (!inFlight && pendingContent !== null && currentBufferId === bufferId) {
+              flushUpdate();
+            }
+          }, 500);
+        } else {
+          flushUpdate();
+        }
       } else {
         saveStatus.value = "saved";
-        if (currentFilePath) emit("dirty-change", currentFilePath, false);
+        if (filePath) emit("dirty-change", filePath, false);
       }
     });
 }
@@ -145,7 +168,23 @@ function createEditor(content: string) {
   });
 }
 
+// Push the current buffer's pending edits to the backend and wait (bounded) until
+// the queue is empty. Re-triggers flushUpdate each tick so a requeued failure keeps
+// retrying; the ~2s cap stops a persistent backend error from blocking forever.
+async function drainPending(): Promise<void> {
+  for (let i = 0; i < 200; i++) {
+    if (pendingContent === null && !inFlight) return;
+    if (pendingContent !== null && !inFlight) flushUpdate();
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
+
 async function loadBuffer(bufferId: string, filePath: string) {
+  // Drain edits queued for the buffer we're leaving before swapping — a fast tab
+  // switch must not discard the previous buffer's unsent keystrokes.
+  await drainPending();
+
+  const gen = ++loadGeneration;
   currentBufferId = bufferId;
   currentFilePath = filePath;
   pendingContent = null;
@@ -154,20 +193,27 @@ async function loadBuffer(bufferId: string, filePath: string) {
   saveStatus.value = "idle";
   try {
     const snap = await getBuffer(bufferId);
+    if (gen !== loadGeneration) return; // a newer switch superseded this load
     localVersion = snap.version;
     createEditor(snap.content);
   } catch (e) {
+    if (gen !== loadGeneration) return;
     console.error("get_buffer failed:", e);
     localVersion = 0;
     createEditor("");
   }
 }
 
-// Push any pending edit to the backend immediately and resolve once it lands.
+// Manual save: drain pending IPC into the backend buffer, then force the backend to
+// persist it to disk so "Saved" means the bytes are actually on disk.
 async function immediatelySave(): Promise<void> {
-  if (pendingContent !== null && !inFlight) flushUpdate();
-  while (inFlight || pendingContent !== null) {
-    await new Promise((r) => setTimeout(r, 10));
+  await drainPending();
+  if (currentBufferId) {
+    try {
+      await flushBuffer(currentBufferId);
+    } catch (e) {
+      console.error("flush_buffer failed:", e);
+    }
   }
 }
 
@@ -218,10 +264,13 @@ onUnmounted(() => {
 
 watch(
   () => props.bufferId,
-  (newBufferId) => {
+  async (newBufferId) => {
     if (newBufferId && props.filePath) {
       loadBuffer(newBufferId, props.filePath);
     } else {
+      // No buffer to show: drain the outgoing one first so its edits aren't lost.
+      await drainPending();
+      loadGeneration++;
       currentBufferId = null;
       currentFilePath = null;
       pendingContent = null;
