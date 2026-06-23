@@ -5,6 +5,7 @@ mod commands;
 mod db;
 mod frontmatter;
 mod menu;
+mod secrets;
 
 use db::DbState;
 use tauri::Manager;
@@ -52,8 +53,12 @@ fn main() {
             buffers::release_buffer,
             commands::llm::summarize_file,
             commands::llm::get_file_summary,
+            commands::llm::list_models,
             commands::settings::get_settings,
             commands::settings::save_settings,
+            secrets::set_api_key,
+            secrets::has_api_key,
+            secrets::delete_api_key,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

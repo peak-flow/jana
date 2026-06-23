@@ -106,6 +106,22 @@ impl DbState {
         .execute(pool)
         .await?;
 
+        // Multi-provider AI defaults. `ai_provider` selects the active backend;
+        // each provider keeps its own model name. API keys are NOT stored here —
+        // they live in the OS keychain (see secrets.rs).
+        for (key, value) in [
+            ("ai_provider", "local"),
+            ("openai_model", "gpt-4o-mini"),
+            ("anthropic_model", "claude-opus-4-8"),
+            ("gemini_model", "gemini-2.0-flash"),
+        ] {
+            sqlx::query("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)")
+                .bind(key)
+                .bind(value)
+                .execute(pool)
+                .await?;
+        }
+
         // --- Multi-window B-lite schema (Milestone 1) ---
         // One row per editor window. `active_tab_id` is the tab focused in that window.
         sqlx::query(
