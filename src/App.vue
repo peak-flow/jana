@@ -112,9 +112,21 @@ async function onCloseTab(tabId: string) {
   const tab = tabs.value.find((t) => t.tabId === tabId);
   try {
     await closeTab(tabId);
-    if (tab) await releaseBuffer(tab.bufferId);
   } catch (e) {
+    // Backend close failed — keep the tab so the UI stays in sync with the
+    // persisted session and the tab doesn't reappear on the next restore.
     console.error("Failed to close tab:", e);
+    return;
+  }
+  // The session row is gone; release the buffer (best-effort) so its refcount
+  // drops and a dirty last view flushes. A release failure must not strand the
+  // already-closed tab in the UI.
+  if (tab) {
+    try {
+      await releaseBuffer(tab.bufferId);
+    } catch (e) {
+      console.error("Failed to release buffer:", e);
+    }
   }
   tabs.value = tabs.value.filter((t) => t.tabId !== tabId);
   if (tab) {
