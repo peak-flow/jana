@@ -112,9 +112,17 @@ export async function getBuffer(bufferId: string): Promise<BufferSnapshot> {
 export async function updateBuffer(
   bufferId: string,
   content: string,
-  baseVersion: number
+  changes: unknown,
+  baseVersion: number,
+  originWindowId: string
 ): Promise<UpdateResult> {
-  return invoke<UpdateResult>("update_buffer", { bufferId, content, baseVersion });
+  return invoke<UpdateResult>("update_buffer", {
+    bufferId,
+    content,
+    changes,
+    baseVersion,
+    originWindowId,
+  });
 }
 
 export async function releaseBuffer(bufferId: string): Promise<void> {

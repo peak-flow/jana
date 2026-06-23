@@ -279,6 +279,7 @@ onMounted(async () => {
       ref="editorRef"
       :file-path="activeTab?.filePath ?? null"
       :buffer-id="activeTab?.bufferId ?? null"
+      :window-id="windowId"
       @dirty-change="onDirtyChange"
     />
     <button class="panel-toggle" @click="showSummaryPanel = !showSummaryPanel" :title="showSummaryPanel ? 'Hide AI panel' : 'Show AI panel'">

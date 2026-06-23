@@ -1,7 +1,7 @@
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use tauri::State;
+use tauri::{Emitter, State};
 
 use crate::frontmatter;
 
@@ -58,6 +58,17 @@ pub struct UpdateResult {
     pub conflict: bool,
     /// Authoritative content, sent back only on conflict so the caller can resync.
     pub content: Option<String>,
+}
+
+/// Broadcast to every window when a buffer accepts an edit. Peers apply `changes`
+/// (a CodeMirror ChangeSet, opaque to the backend) to their own view; the window
+/// that originated the edit filters its own event out via `origin_window_id`.
+#[derive(Clone, Serialize)]
+pub struct BufferUpdatedEvent {
+    pub buffer_id: String,
+    pub changes: serde_json::Value,
+    pub version: u64,
+    pub origin_window_id: String,
 }
 
 fn now_millis() -> i64 {
@@ -146,32 +157,53 @@ pub async fn get_buffer(
 
 /// Apply an edit to a buffer. Accepts the edit only if `base_version` matches the
 /// current version (kills last-writer-wins); otherwise returns the authoritative
-/// content so the caller can resync.
+/// content so the caller can resync. On acceptance, broadcasts `buffer-updated` to
+/// every window so peers viewing the same buffer apply the change live.
 #[tauri::command]
 pub async fn update_buffer(
+    app: tauri::AppHandle,
     buffer_id: String,
     content: String,
+    changes: serde_json::Value,
     base_version: u64,
+    origin_window_id: String,
     registry: State<'_, BufferRegistry>,
 ) -> Result<UpdateResult, String> {
-    let mut map = registry.lock();
-    let buf = map.get_mut(&buffer_id).ok_or("Buffer not found")?;
-    if base_version == buf.version {
-        buf.content = content;
-        buf.version += 1;
-        buf.last_edit = now_millis();
-        Ok(UpdateResult {
-            version: buf.version,
-            conflict: false,
-            content: None,
-        })
-    } else {
-        Ok(UpdateResult {
-            version: buf.version,
-            conflict: true,
-            content: Some(buf.content.clone()),
-        })
+    // Mutate under the lock, then release it before emitting.
+    let (version, conflict, content_opt) = {
+        let mut map = registry.lock();
+        let buf = map.get_mut(&buffer_id).ok_or("Buffer not found")?;
+        if base_version == buf.version {
+            buf.content = content;
+            buf.version += 1;
+            buf.last_edit = now_millis();
+            (buf.version, false, None)
+        } else {
+            (buf.version, true, Some(buf.content.clone()))
+        }
+    };
+
+    // Only accepted edits are broadcast; a conflicting caller resyncs from the
+    // returned content instead of peers re-applying a stale change.
+    if !conflict {
+        if let Err(e) = app.emit(
+            "buffer-updated",
+            BufferUpdatedEvent {
+                buffer_id,
+                changes,
+                version,
+                origin_window_id,
+            },
+        ) {
+            eprintln!("failed to emit buffer-updated: {}", e);
+        }
     }
+
+    Ok(UpdateResult {
+        version,
+        conflict,
+        content: content_opt,
+    })
 }
 
 /// Drop a view's reference. When the last view is released, the buffer is flushed

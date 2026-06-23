@@ -1,17 +1,30 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted } from "vue";
-import { EditorState } from "@codemirror/state";
+import { EditorState, ChangeSet, Annotation } from "@codemirror/state";
 import { EditorView, keymap, lineNumbers, highlightActiveLine } from "@codemirror/view";
 import { markdown } from "@codemirror/lang-markdown";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { search, searchKeymap, highlightSelectionMatches } from "@codemirror/search";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getBuffer, updateBuffer } from "../composables/useFiles";
 
 const props = defineProps<{
   filePath: string | null;
   bufferId: string | null;
+  windowId: string;
 }>();
+
+// Remote edits (applied from a peer window's `buffer-updated`) are tagged so the
+// update listener doesn't echo them back to the backend.
+const Remote = Annotation.define<boolean>();
+
+interface BufferUpdatedPayload {
+  buffer_id: string;
+  changes: any;
+  version: number;
+  origin_window_id: string;
+}
 
 const emit = defineEmits<{
   (e: "dirty-change", filePath: string, isDirty: boolean): void;
@@ -26,26 +39,32 @@ let currentFilePath: string | null = null;
 // Optimistic version the editor believes the buffer is at. Seeded from get_buffer
 // on load and advanced by each accepted update_buffer ack.
 let localVersion = 0;
-// Single-flight push: only one update_buffer is in flight at a time; the newest
-// content is coalesced into `pending` and sent next. This keeps base_version in
-// order and avoids hammering IPC on every keystroke.
+// Single-flight push: only one update_buffer is in flight at a time. The newest
+// content and the composed ChangeSet covering all un-sent keystrokes are coalesced
+// and sent next. This keeps base_version in order, avoids hammering IPC on every
+// keystroke, and still relays a change set peers can apply to their own view.
 let inFlight = false;
-let pending: string | null = null;
+let pendingContent: string | null = null;
+let pendingChanges: ChangeSet | null = null;
 // Guards the doc-replace we do on conflict resync so it isn't treated as an edit.
 let applyingRemote = false;
+// Active subscription to peer `buffer-updated` broadcasts.
+let unlisten: UnlistenFn | null = null;
 
 function flushUpdate() {
-  if (pending === null || !currentBufferId) {
+  if (pendingContent === null || pendingChanges === null || !currentBufferId) {
     inFlight = false;
     return;
   }
-  const content = pending;
-  pending = null;
+  const content = pendingContent;
+  const changes = pendingChanges;
+  pendingContent = null;
+  pendingChanges = null;
   inFlight = true;
   const base = localVersion;
   localVersion = base + 1;
   saveStatus.value = "saving";
-  updateBuffer(currentBufferId, content, base)
+  updateBuffer(currentBufferId, content, changes.toJSON(), base, props.windowId)
     .then((r) => {
       if (r.conflict) {
         // Backend is ahead — adopt its version and content.
@@ -61,7 +80,7 @@ function flushUpdate() {
     })
     .finally(() => {
       inFlight = false;
-      if (pending !== null) {
+      if (pendingContent !== null) {
         flushUpdate();
       } else {
         saveStatus.value = "saved";
@@ -70,8 +89,10 @@ function flushUpdate() {
     });
 }
 
-function scheduleUpdate(content: string) {
-  pending = content;
+function scheduleUpdate(changes: ChangeSet, content: string) {
+  pendingContent = content;
+  // Compose so a single flush carries every un-sent keystroke as one change set.
+  pendingChanges = pendingChanges ? pendingChanges.compose(changes) : changes;
   if (currentFilePath) emit("dirty-change", currentFilePath, true);
   if (!inFlight) flushUpdate();
 }
@@ -103,9 +124,11 @@ function createEditor(content: string) {
       oneDark,
       EditorView.updateListener.of((update) => {
         if (!update.docChanged || applyingRemote) return;
+        // Don't echo a remote-applied change back to the backend.
+        if (update.transactions.some((tr) => tr.annotation(Remote))) return;
         if (currentBufferId) {
           saveStatus.value = "idle";
-          scheduleUpdate(update.state.doc.toString());
+          scheduleUpdate(update.changes, update.state.doc.toString());
         }
       }),
       EditorView.theme({
@@ -125,7 +148,8 @@ function createEditor(content: string) {
 async function loadBuffer(bufferId: string, filePath: string) {
   currentBufferId = bufferId;
   currentFilePath = filePath;
-  pending = null;
+  pendingContent = null;
+  pendingChanges = null;
   inFlight = false;
   saveStatus.value = "idle";
   try {
@@ -141,8 +165,8 @@ async function loadBuffer(bufferId: string, filePath: string) {
 
 // Push any pending edit to the backend immediately and resolve once it lands.
 async function immediatelySave(): Promise<void> {
-  if (pending !== null && !inFlight) flushUpdate();
-  while (inFlight || pending !== null) {
+  if (pendingContent !== null && !inFlight) flushUpdate();
+  while (inFlight || pendingContent !== null) {
     await new Promise((r) => setTimeout(r, 10));
   }
 }
@@ -155,11 +179,30 @@ defineExpose({ immediatelySave, getContent });
 
 // Flush pending edits to the backend on window blur.
 function onBlur() {
-  if (pending !== null && !inFlight) flushUpdate();
+  if (pendingContent !== null && !inFlight) flushUpdate();
 }
 
-onMounted(() => {
+// Apply a peer window's edit to this view. Three echo guards keep it from looping:
+// 1. origin filter — ignore our own broadcast; 2. version monotonicity — ignore
+// stale/duplicate events; 3. the Remote annotation (applied here) stops the update
+// listener from re-sending it. CodeMirror maps this view's cursor through `changes`.
+function onBufferUpdated(payload: BufferUpdatedPayload) {
+  if (payload.origin_window_id === props.windowId) return;
+  if (payload.buffer_id !== currentBufferId) return;
+  if (payload.version <= localVersion) return;
+  if (!editorView) return;
+  editorView.dispatch({
+    changes: ChangeSet.fromJSON(payload.changes),
+    annotations: Remote.of(true),
+  });
+  localVersion = payload.version;
+}
+
+onMounted(async () => {
   window.addEventListener("blur", onBlur);
+  unlisten = await listen<BufferUpdatedPayload>("buffer-updated", (e) =>
+    onBufferUpdated(e.payload)
+  );
   if (props.bufferId && props.filePath) {
     loadBuffer(props.bufferId, props.filePath);
   } else {
@@ -169,6 +212,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.removeEventListener("blur", onBlur);
+  if (unlisten) unlisten();
   editorView?.destroy();
 });
 
@@ -180,7 +224,8 @@ watch(
     } else {
       currentBufferId = null;
       currentFilePath = null;
-      pending = null;
+      pendingContent = null;
+      pendingChanges = null;
       inFlight = false;
       createEditor("");
     }
