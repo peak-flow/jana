@@ -124,6 +124,10 @@ export async function updateBuffer(
   });
 }
 
+export async function flushBuffer(bufferId: string): Promise<void> {
+  return invoke("flush_buffer", { bufferId });
+}
+
 export async function releaseBuffer(bufferId: string): Promise<void> {
   return invoke("release_buffer", { bufferId });
 }

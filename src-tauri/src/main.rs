@@ -64,6 +64,7 @@ fn main() {
             buffers::acquire_buffer,
             buffers::get_buffer,
             buffers::update_buffer,
+            buffers::flush_buffer,
             buffers::release_buffer,
             commands::llm::summarize_file,
             commands::llm::get_file_summary,

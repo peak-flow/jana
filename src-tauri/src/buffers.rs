@@ -321,6 +321,49 @@ pub fn rekey_buffer(
     }
 }
 
+/// Force an immediate disk write of one buffer (manual save / Cmd+S). Unlike the
+/// idle loop this ignores the idle window, so the editor can guarantee the file is
+/// on disk before clearing its dirty state. No-op if the buffer is clean or gone.
+#[tauri::command]
+pub async fn flush_buffer(
+    buffer_id: String,
+    registry: State<'_, BufferRegistry>,
+) -> Result<(), String> {
+    flush_buffer_in_registry(&registry, &buffer_id)
+}
+
+/// Single-buffer flush, factored out of the command so it is unit-testable.
+pub fn flush_buffer_in_registry(registry: &BufferRegistry, buffer_id: &str) -> Result<(), String> {
+    let snapshot = {
+        let map = registry.lock();
+        match map.get(buffer_id) {
+            Some(buf) if buf.dirty() => Some((
+                buf.file_path.clone(),
+                buf.jana_id.clone(),
+                buf.content.clone(),
+                buf.version,
+            )),
+            _ => None,
+        }
+    };
+
+    let Some((file_path, jana_id, content, version)) = snapshot else {
+        return Ok(());
+    };
+
+    let full = frontmatter::compose_with_frontmatter(&jana_id, &content);
+    std::fs::write(&file_path, &full).map_err(|e| format!("Failed to flush buffer: {}", e))?;
+
+    // Advance the saved marker only if no newer edit landed during the write.
+    let mut map = registry.lock();
+    if let Some(buf) = map.get_mut(buffer_id) {
+        if buf.version == version {
+            buf.last_saved_version = version;
+        }
+    }
+    Ok(())
+}
+
 fn flush_where(registry: &BufferRegistry, require_idle: bool) {
     let now = now_millis();
     let pending: Vec<(String, String, String, String, u64)> = {
@@ -456,6 +499,36 @@ mod tests {
 
         assert_eq!(reg.lock().get(&key).unwrap().jana_id, "new-jid");
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn flush_buffer_writes_dirty_and_marks_saved_ignoring_idle() {
+        let path = temp_path("manual_save.md");
+        let _ = std::fs::remove_file(&path);
+        let reg = BufferRegistry::default();
+        // dirty AND edited "now" — the idle loop would skip it, manual flush must not.
+        insert_buffer(&reg, &path, &path, "jid-m", "manual body", 4, 0, now_millis());
+
+        flush_buffer_in_registry(&reg, &path).unwrap();
+
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        assert!(on_disk.contains("manual body"), "content written immediately");
+        assert_eq!(reg.lock().get(&path).unwrap().last_saved_version, 4);
+        // The buffer stays registered (manual save does not evict).
+        assert!(reg.lock().get(&path).is_some());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn flush_buffer_is_noop_for_clean_buffer() {
+        let path = temp_path("manual_clean.md");
+        let _ = std::fs::remove_file(&path);
+        let reg = BufferRegistry::default();
+        insert_buffer(&reg, &path, &path, "jid", "x", 2, 2, now_millis()); // clean
+
+        flush_buffer_in_registry(&reg, &path).unwrap();
+
+        assert!(!std::path::Path::new(&path).exists(), "clean buffer not written");
     }
 
     #[test]
