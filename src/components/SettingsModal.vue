@@ -22,6 +22,28 @@ const PROVIDERS: { value: AiProvider; label: string }[] = [
   { value: "gemini", label: "Gemini (Google)" },
 ];
 
+// Curated default model lists so the dropdown isn't overwhelming. The field stays
+// editable for anything else, and "Fetch all" pulls the live list per provider.
+// Local has no sensible preset (depends on what's loaded in LM Studio).
+const PROVIDER_MODELS: Record<AiProvider, string[]> = {
+  local: [],
+  openai: ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-4o", "gpt-4o-mini"],
+  anthropic: [
+    "claude-opus-4-8",
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5",
+    "claude-fable-5",
+    "claude-opus-4-7",
+  ],
+  gemini: [
+    "gemini-2.5-pro",
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
+    "gemini-1.5-pro",
+  ],
+};
+
 const provider = ref<AiProvider>("local");
 const localUrl = ref("");
 const localModel = ref("");
@@ -71,15 +93,17 @@ onMounted(async () => {
     for (const p of ["openai", "anthropic", "gemini"] as AiProvider[]) {
       keyStatus.value[p] = await hasApiKey(p);
     }
+    modelOptions.value = [...PROVIDER_MODELS[provider.value]];
   } catch (e) {
     console.error("Failed to load settings:", e);
   }
 });
 
-// Switching providers resets the transient key field and the fetched model list.
+// Switching providers resets the transient key field and shows that provider's
+// curated model list.
 function onProviderChange() {
   apiKeyInput.value = "";
-  modelOptions.value = [];
+  modelOptions.value = [...PROVIDER_MODELS[provider.value]];
   notice.value = null;
 }
 
@@ -229,10 +253,10 @@ async function handleSave() {
             <button
               class="btn-secondary"
               :disabled="fetching || !keyIsSet"
-              :title="keyIsSet ? 'List available models' : 'Save an API key first'"
+              :title="keyIsSet ? 'List every model this key can access' : 'Save an API key first'"
               @click="handleFetchModels"
             >
-              {{ fetching ? "..." : "Fetch models" }}
+              {{ fetching ? "..." : "Fetch all" }}
             </button>
           </div>
         </div>
