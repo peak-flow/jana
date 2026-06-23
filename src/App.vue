@@ -9,6 +9,7 @@ import {
   openFileDialog,
   listTabs,
   closeTab,
+  deleteTempFileIfOrphaned,
   acquireBuffer,
   releaseBuffer,
   forkFile,
@@ -124,6 +125,9 @@ async function onCloseTab(tabId: string) {
   if (tab) {
     try {
       await releaseBuffer(tab.bufferId);
+      // Only after the buffer's final flush: remove the temp file if nothing else
+      // references it, so a release-time write can't re-create a file deleted first.
+      await deleteTempFileIfOrphaned(tab.filePath);
     } catch (e) {
       console.error("Failed to release buffer:", e);
     }

@@ -56,6 +56,7 @@ fn main() {
             commands::files::create_app_window,
             commands::files::save_temp_file_as,
             commands::files::close_tab,
+            commands::files::delete_temp_file_if_orphaned,
             commands::files::list_tabs,
             commands::files::update_tab_view,
             commands::files::fork_file,

@@ -128,6 +128,10 @@ export async function flushBuffer(bufferId: string): Promise<void> {
   return invoke("flush_buffer", { bufferId });
 }
 
+export async function deleteTempFileIfOrphaned(filePath: string): Promise<void> {
+  return invoke("delete_temp_file_if_orphaned", { filePath });
+}
+
 export async function releaseBuffer(bufferId: string): Promise<void> {
   return invoke("release_buffer", { bufferId });
 }

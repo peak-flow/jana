@@ -289,13 +289,6 @@ pub async fn list_tabs(
 
 #[tauri::command]
 pub async fn close_tab(tab_id: String, state: State<'_, DbState>) -> Result<(), String> {
-    let file_path: Option<String> =
-        sqlx::query_scalar("SELECT file_path FROM open_tabs WHERE tab_id = ?")
-            .bind(&tab_id)
-            .fetch_optional(&state.pool)
-            .await
-            .map_err(|e| e.to_string())?;
-
     sqlx::query("DELETE FROM open_tabs WHERE tab_id = ?")
         .bind(&tab_id)
         .execute(&state.pool)
@@ -309,21 +302,32 @@ pub async fn close_tab(tab_id: String, state: State<'_, DbState>) -> Result<(), 
         .await
         .map_err(|e| e.to_string())?;
 
-    // Delete a temp file only when no other tab (in any window) still references it.
-    if let Some(fp) = file_path {
-        if is_temp_file(&fp) {
-            let others: i64 =
-                sqlx::query_scalar("SELECT COUNT(*) FROM open_tabs WHERE file_path = ?")
-                    .bind(&fp)
-                    .fetch_one(&state.pool)
-                    .await
-                    .map_err(|e| e.to_string())?;
-            if others == 0 {
-                let _ = std::fs::remove_file(&fp);
-            }
-        }
-    }
+    // NOTE: temp-file deletion is intentionally NOT done here. The frontend calls
+    // delete_temp_file_if_orphaned only after release_buffer has run, so the buffer's
+    // final flush can't re-create a file we deleted first.
+    Ok(())
+}
 
+/// Delete an orphaned temp file: removes `file_path` only if it lives in the temp dir
+/// and no remaining tab (in any window) references it. Called by the close path after
+/// the buffer has been released and its final flush has completed, so this never
+/// races a release-time write that would re-create the file.
+#[tauri::command]
+pub async fn delete_temp_file_if_orphaned(
+    file_path: String,
+    state: State<'_, DbState>,
+) -> Result<(), String> {
+    if !is_temp_file(&file_path) {
+        return Ok(());
+    }
+    let others: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM open_tabs WHERE file_path = ?")
+        .bind(&file_path)
+        .fetch_one(&state.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    if others == 0 {
+        let _ = std::fs::remove_file(&file_path);
+    }
     Ok(())
 }
 
