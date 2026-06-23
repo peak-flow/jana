@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, SqlitePool};
+use std::io::Write;
 use std::path::Path;
 use tauri::State;
 use tauri_plugin_dialog::DialogExt;
@@ -156,22 +157,29 @@ pub async fn create_new_file(
     state: State<'_, DbState>,
 ) -> Result<TabResult, String> {
     let td = temp_dir()?;
-
-    // Find next available "Untitled N.md"
-    let mut n = 1u32;
-    let file_path = loop {
-        let name = format!("Untitled {}.md", n);
-        let path = td.join(&name);
-        if !path.exists() {
-            break path.to_string_lossy().to_string();
-        }
-        n += 1;
-    };
-
     let jana_id = Uuid::new_v4().to_string();
     let full = frontmatter::compose_with_frontmatter(&jana_id, "");
-    std::fs::write(&file_path, &full)
-        .map_err(|e| format!("Failed to create temp file: {}", e))?;
+
+    // Reserve the next available "Untitled N.md" and create it atomically:
+    // create_new(true) makes name reservation and file creation one operation, so
+    // two concurrent "New File" actions across windows can't both pick the same name.
+    let mut n = 1u32;
+    let file_path = loop {
+        let path = td.join(format!("Untitled {}.md", n));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut f) => {
+                f.write_all(full.as_bytes())
+                    .map_err(|e| format!("Failed to create temp file: {}", e))?;
+                break path.to_string_lossy().to_string();
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => n += 1,
+            Err(e) => return Err(format!("Failed to create temp file: {}", e)),
+        }
+    };
 
     // A freshly-named temp file is always new, so this creates a new tab.
     add_or_get_tab(&state.pool, &window_id, &file_path).await
