@@ -101,29 +101,30 @@ pub async fn acquire_buffer(
     let buffer_id = canonical_buffer_id(&file_path);
     let file_name = file_name_of(&file_path);
 
+    // Hold the lock across the whole acquire so a first-time load is single-flight:
+    // two windows opening the same file concurrently can't each stamp a different
+    // jana_id and leave disk disagreeing with the registry.
+    let mut map = registry.lock();
+
     // Fast path: already loaded — just add a reference.
-    {
-        let mut map = registry.lock();
-        if let Some(buf) = map.get_mut(&buffer_id) {
-            buf.refcount += 1;
-            return Ok(AcquireResult {
-                buffer_id,
-                jana_id: buf.jana_id.clone(),
-                content: buf.content.clone(),
-                version: buf.version,
-                file_name,
-            });
-        }
+    if let Some(buf) = map.get_mut(&buffer_id) {
+        buf.refcount += 1;
+        return Ok(AcquireResult {
+            buffer_id,
+            jana_id: buf.jana_id.clone(),
+            content: buf.content.clone(),
+            version: buf.version,
+            file_name,
+        });
     }
 
-    // Load from disk outside the lock (this may inject a jana_id and write).
+    // First reference: load from disk (sync I/O that may inject a jana_id and write)
+    // while still holding the lock, then register the buffer.
     let (jana_id, content) = frontmatter::ensure_jana_id(&file_path)?;
-
-    let mut map = registry.lock();
     let buf = map.entry(buffer_id.clone()).or_insert_with(|| BufferState {
         file_path: file_path.clone(),
-        jana_id: jana_id.clone(),
-        content: content.clone(),
+        jana_id,
+        content,
         version: 0,
         last_saved_version: 0,
         refcount: 0,
@@ -219,61 +220,26 @@ pub async fn release_buffer(
 
 /// Refcount-aware release + flush, factored out of the command so it is unit-testable.
 pub fn release_in_registry(registry: &BufferRegistry, buffer_id: &str) -> Result<(), String> {
-    // Phase 1 (locked): drop the ref. If this was the last view, a clean buffer is
-    // evicted immediately; a dirty one is snapshotted but left registered until its
-    // write succeeds, so we never remove content that isn't safely on disk yet.
-    let snapshot = {
-        let mut map = registry.lock();
-        match map.get_mut(buffer_id) {
-            Some(buf) => {
-                if buf.refcount > 0 {
-                    buf.refcount -= 1;
-                }
-                if buf.refcount == 0 {
-                    if buf.dirty() {
-                        Some((
-                            buf.file_path.clone(),
-                            buf.jana_id.clone(),
-                            buf.content.clone(),
-                            buf.version,
-                        ))
-                    } else {
-                        map.remove(buffer_id);
-                        None
-                    }
-                } else {
-                    None
-                }
-            }
-            None => None,
-        }
-    };
-
-    let Some((file_path, jana_id, content, version)) = snapshot else {
-        return Ok(());
-    };
-
-    // Phase 2 (unlocked): write the final content. On failure the buffer stays
-    // registered with its unsaved content and the error surfaces to the caller.
-    let full = frontmatter::compose_with_frontmatter(&jana_id, &content);
-    std::fs::write(&file_path, &full).map_err(|e| format!("Failed to flush buffer: {}", e))?;
-
-    // Phase 3 (locked): the write landed. Mark what we saved, and evict only if the
-    // buffer is still unreferenced and unchanged. If it was re-acquired or edited
-    // mid-write, keep it — the next release/flush will persist any newer content.
+    // Hold the lock across the whole release: drop the ref, and if this was the last
+    // view, flush (single writer) then evict. Because the write happens under the
+    // lock, a failed flush leaves the content registered and nothing can race the
+    // remove between the write and the eviction.
     let mut map = registry.lock();
-    let mut evict = false;
-    if let Some(buf) = map.get_mut(buffer_id) {
-        if buf.version == version {
-            buf.last_saved_version = version;
-            if buf.refcount == 0 {
-                evict = true;
+    let refcount = match map.get_mut(buffer_id) {
+        Some(buf) => {
+            if buf.refcount > 0 {
+                buf.refcount -= 1;
             }
+            buf.refcount
         }
+        None => return Ok(()),
+    };
+    if refcount != 0 {
+        return Ok(());
     }
-    if evict {
-        map.remove(buffer_id);
-    }
+    // Last view: persist any unsaved content, then evict only on a successful write.
+    write_locked(&mut map, buffer_id).map_err(|e| format!("Failed to flush buffer: {}", e))?;
+    map.remove(buffer_id);
     Ok(())
 }
 
@@ -321,6 +287,27 @@ pub fn rekey_buffer(
     }
 }
 
+/// The single, serialized disk writer. Writes one buffer to disk while the registry
+/// lock (`map`) is held, so no other thread can snapshot or write the same file
+/// concurrently and the bytes written are always the buffer's latest content. Marks
+/// the buffer saved on success. A clean or absent buffer is a no-op.
+fn write_locked(map: &mut HashMap<String, BufferState>, buffer_id: &str) -> std::io::Result<()> {
+    let (file_path, full, version) = match map.get(buffer_id) {
+        Some(buf) if buf.dirty() => (
+            buf.file_path.clone(),
+            frontmatter::compose_with_frontmatter(&buf.jana_id, &buf.content),
+            buf.version,
+        ),
+        _ => return Ok(()),
+    };
+    std::fs::write(&file_path, &full)?;
+    // The lock is held throughout, so no edit can have landed since the snapshot.
+    if let Some(buf) = map.get_mut(buffer_id) {
+        buf.last_saved_version = version;
+    }
+    Ok(())
+}
+
 /// Force an immediate disk write of one buffer (manual save / Cmd+S). Unlike the
 /// idle loop this ignores the idle window, so the editor can guarantee the file is
 /// on disk before clearing its dirty state. No-op if the buffer is clean or gone.
@@ -334,79 +321,54 @@ pub async fn flush_buffer(
 
 /// Single-buffer flush, factored out of the command so it is unit-testable.
 pub fn flush_buffer_in_registry(registry: &BufferRegistry, buffer_id: &str) -> Result<(), String> {
-    let snapshot = {
-        let map = registry.lock();
-        match map.get(buffer_id) {
-            Some(buf) if buf.dirty() => Some((
-                buf.file_path.clone(),
-                buf.jana_id.clone(),
-                buf.content.clone(),
-                buf.version,
-            )),
-            _ => None,
-        }
-    };
-
-    let Some((file_path, jana_id, content, version)) = snapshot else {
-        return Ok(());
-    };
-
-    let full = frontmatter::compose_with_frontmatter(&jana_id, &content);
-    std::fs::write(&file_path, &full).map_err(|e| format!("Failed to flush buffer: {}", e))?;
-
-    // Advance the saved marker only if no newer edit landed during the write.
     let mut map = registry.lock();
-    if let Some(buf) = map.get_mut(buffer_id) {
-        if buf.version == version {
-            buf.last_saved_version = version;
-        }
-    }
-    Ok(())
+    write_locked(&mut map, buffer_id).map_err(|e| format!("Failed to flush buffer: {}", e))
 }
 
-fn flush_where(registry: &BufferRegistry, require_idle: bool) {
+/// Flush dirty buffers to disk one at a time, each under the registry lock via
+/// `write_locked`, so writes are serialized and never interleave with edits or with
+/// each other. Returns the (file_path, error) of every buffer whose write failed.
+fn flush_where(registry: &BufferRegistry, require_idle: bool) -> Vec<(String, String)> {
     let now = now_millis();
-    let pending: Vec<(String, String, String, String, u64)> = {
+    // Cheap snapshot of candidate ids; each is re-checked under the lock at write time.
+    let ids: Vec<String> = {
         let map = registry.lock();
         map.iter()
             .filter(|(_, b)| b.dirty() && (!require_idle || now - b.last_edit > 800))
-            .map(|(id, b)| {
-                (
-                    id.clone(),
-                    b.file_path.clone(),
-                    b.jana_id.clone(),
-                    b.content.clone(),
-                    b.version,
-                )
-            })
+            .map(|(id, _)| id.clone())
             .collect()
     };
 
-    for (id, file_path, jana_id, content, version) in pending {
-        let full = frontmatter::compose_with_frontmatter(&jana_id, &content);
-        match std::fs::write(&file_path, &full) {
-            Ok(_) => {
-                // Only advance the saved marker if no newer edit landed mid-write.
-                let mut map = registry.lock();
-                if let Some(buf) = map.get_mut(&id) {
-                    if buf.version == version {
-                        buf.last_saved_version = version;
-                    }
-                }
-            }
-            Err(e) => eprintln!("flush write failed for {}: {}", file_path, e),
+    let mut failures = Vec::new();
+    for id in ids {
+        let mut map = registry.lock();
+        // Re-check under the lock: the buffer may have been edited (reopening the idle
+        // window) or released since the snapshot was taken.
+        let eligible = map
+            .get(&id)
+            .map_or(false, |b| b.dirty() && (!require_idle || now - b.last_edit > 800));
+        if !eligible {
+            continue;
+        }
+        if let Err(e) = write_locked(&mut map, &id) {
+            let path = map.get(&id).map(|b| b.file_path.clone()).unwrap_or_default();
+            failures.push((path, e.to_string()));
         }
     }
+    failures
 }
 
 /// Flush buffers that are dirty and have been idle for >800ms. The periodic tick.
 pub fn flush_idle_buffers(registry: &BufferRegistry) {
-    flush_where(registry, true);
+    for (path, err) in flush_where(registry, true) {
+        eprintln!("idle flush failed for {}: {}", path, err);
+    }
 }
 
-/// Flush every dirty buffer regardless of idle time — used on app exit.
-pub fn flush_all(registry: &BufferRegistry) {
-    flush_where(registry, false);
+/// Flush every dirty buffer regardless of idle time — used on app exit. Returns any
+/// (file_path, error) failures so the exit path can surface them before shutdown.
+pub fn flush_all(registry: &BufferRegistry) -> Vec<(String, String)> {
+    flush_where(registry, false)
 }
 
 #[cfg(test)]

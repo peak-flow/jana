@@ -79,10 +79,12 @@ fn main() {
         .expect("error while building tauri application");
 
     app.run(|app_handle, event| {
-        // Flush any unsaved buffers before the process exits.
+        // Flush any unsaved buffers before the process exits, surfacing any failures.
         if let tauri::RunEvent::ExitRequested { .. } = event {
             let registry = app_handle.state::<buffers::BufferRegistry>();
-            buffers::flush_all(&registry);
+            for (path, err) in buffers::flush_all(&registry) {
+                eprintln!("exit flush failed for {}: {}", path, err);
+            }
         }
     });
 }
