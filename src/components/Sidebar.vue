@@ -123,7 +123,7 @@ onUnmounted(() => {
         @contextmenu="openContextMenu($event, tab)"
       >
         <span class="file-name" :class="{ 'temp-file': isTempFile(tab.filePath) }">
-          <span v-if="isTempFile(tab.filePath)" class="temp-indicator" title="Temporary file (not saved to disk)">○</span>
+          <span v-if="isTempFile(tab.filePath)" class="temp-indicator" title="Temporary file — use Save As to choose a permanent location">○</span>
           <span v-if="dirtyFiles.has(tab.filePath)" class="dirty-indicator" title="Unsaved changes">•</span>
           {{ tab.fileName }}
         </span>
