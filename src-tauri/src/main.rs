@@ -4,6 +4,7 @@ mod buffers;
 mod commands;
 mod db;
 mod frontmatter;
+mod menu;
 
 use db::DbState;
 use tauri::Manager;
@@ -19,7 +20,12 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .manage(db_state)
         .manage(buffers::BufferRegistry::default())
+        .on_menu_event(|app, event| menu::handle_event(app, event.id().0.as_str()))
         .setup(|app| {
+            // Native menu bar; custom items are relayed to the focused window.
+            let app_menu = menu::build(app.handle())?;
+            app.set_menu(app_menu)?;
+
             // Single disk writer: periodically flush dirty, idle buffers to disk.
             let registry = app.state::<buffers::BufferRegistry>().inner().clone();
             std::thread::spawn(move || loop {

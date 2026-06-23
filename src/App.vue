@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from "vue";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import Sidebar from "./components/Sidebar.vue";
 import Editor from "./components/Editor.vue";
 import SummaryPanel from "./components/SummaryPanel.vue";
@@ -194,38 +195,51 @@ async function handleSaveAs(tabId: string) {
   }
 }
 
-// Keyboard shortcuts
-function handleKeydown(e: KeyboardEvent) {
-  const mod = e.metaKey || e.ctrlKey;
-  if (!mod) return;
-
-  if ((e.key === "n" || e.key === "N") && e.shiftKey) {
-    e.preventDefault();
-    handleNewWindow();
-  } else if (e.key === "n") {
-    e.preventDefault();
-    handleNewFile();
-  } else if (e.key === "o") {
-    e.preventDefault();
-    handleOpenFile();
-  } else if ((e.key === "s" || e.key === "S") && e.shiftKey) {
-    e.preventDefault();
-    if (activeTabId.value) handleSaveAs(activeTabId.value);
-  } else if (e.key === "s") {
-    e.preventDefault();
-    editorRef.value?.immediatelySave();
-  } else if (e.key === "w") {
-    e.preventDefault();
-    if (activeTabId.value) onCloseTab(activeTabId.value);
+// Native menu actions are relayed from the backend to the focused window. Their
+// accelerators (⌘N, ⌘O, ⌘S, …) are owned by the macOS menu, so we no longer
+// handle those keys here.
+function handleMenuAction(action: string) {
+  switch (action) {
+    case "new-file":
+      handleNewFile();
+      break;
+    case "new-window":
+      handleNewWindow();
+      break;
+    case "open-file":
+      handleOpenFile();
+      break;
+    case "save":
+      editorRef.value?.immediatelySave();
+      break;
+    case "save-as":
+      if (activeTabId.value) handleSaveAs(activeTabId.value);
+      break;
+    case "reveal":
+      if (activeTab.value) onRevealInFinder(activeTab.value.filePath);
+      break;
+    case "close-tab":
+      if (activeTabId.value) onCloseTab(activeTabId.value);
+      break;
+    case "settings":
+      showSettings.value = true;
+      break;
+    case "toggle-panel":
+      showSummaryPanel.value = !showSummaryPanel.value;
+      break;
   }
 }
 
-onMounted(() => {
-  window.addEventListener("keydown", handleKeydown);
+let unlistenMenu: UnlistenFn | null = null;
+
+onMounted(async () => {
+  unlistenMenu = await listen<string>("menu-action", (e) =>
+    handleMenuAction(e.payload)
+  );
 });
 
 onUnmounted(() => {
-  window.removeEventListener("keydown", handleKeydown);
+  if (unlistenMenu) unlistenMenu();
 });
 
 // Session restore — load this window's tabs and acquire each file's buffer.
