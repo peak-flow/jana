@@ -274,6 +274,12 @@ pub fn rekey_buffer(
     let old_id = canonical_buffer_id(old_path);
     let new_id = canonical_buffer_id(new_path);
     let mut map = registry.lock();
+    // Refuse to clobber a buffer already loaded at the destination — overwriting it
+    // would drop its content and refcount. (The Save As command also rejects targets
+    // already open in another tab; this hardens the primitive itself.)
+    if new_id != old_id && map.contains_key(&new_id) {
+        return None;
+    }
     if let Some(mut buf) = map.remove(&old_id) {
         buf.file_path = new_path.to_string();
         buf.jana_id = jana_id.to_string();
@@ -461,6 +467,31 @@ mod tests {
 
         assert_eq!(reg.lock().get(&key).unwrap().jana_id, "new-jid");
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn rekey_refuses_to_overwrite_a_loaded_destination() {
+        let old = temp_path("rekey_src.md");
+        let new = temp_path("rekey_dst.md");
+        std::fs::write(&old, "x").unwrap();
+        std::fs::write(&new, "y").unwrap();
+        let old_key = canonical_buffer_id(&old);
+        let new_key = canonical_buffer_id(&new);
+        let reg = BufferRegistry::default();
+        // Both the source and an existing buffer at the destination are loaded.
+        insert_buffer(&reg, &old_key, &old, "jid-src", "source body", 3, 0, 0);
+        insert_buffer(&reg, &new_key, &new, "jid-dst", "destination body", 7, 7, 0);
+
+        let result = rekey_buffer(&reg, &old, &new, "jid-src", "source body");
+
+        assert!(result.is_none(), "rekey rejected the collision");
+        let map = reg.lock();
+        // The destination buffer is untouched; the source buffer is left in place.
+        assert_eq!(map.get(&new_key).unwrap().content, "destination body");
+        assert!(map.get(&old_key).is_some(), "source buffer not consumed on collision");
+        drop(map);
+        let _ = std::fs::remove_file(&old);
+        let _ = std::fs::remove_file(&new);
     }
 
     #[test]
