@@ -394,13 +394,23 @@ pub async fn reveal_in_finder(file_path: String) -> Result<(), String> {
 pub async fn save_temp_file_as(
     app: tauri::AppHandle,
     tab_id: String,
-    file_path: String,
     state: State<'_, DbState>,
     registry: State<'_, BufferRegistry>,
 ) -> Result<Option<SaveAsResult>, String> {
+    // The tab row is the source of truth for which file this tab edits. Deriving the
+    // source path server-side (instead of trusting a caller-supplied path) prevents a
+    // stale/mismatched caller from saving one tab's buffer into another tab's file.
+    let source_path: String =
+        sqlx::query_scalar("SELECT file_path FROM open_tabs WHERE tab_id = ?")
+            .bind(&tab_id)
+            .fetch_optional(&state.pool)
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or("Tab not found")?;
+
     // Content is owned by the backend buffer (authoritative for active and
     // inactive tabs alike). The active editor flushes pending edits before calling.
-    let (jana_id, content) = buffers::buffer_content(&registry, &file_path)
+    let (jana_id, content) = buffers::buffer_content(&registry, &source_path)
         .ok_or("No loaded buffer for this file")?;
 
     let picked = app
@@ -419,6 +429,25 @@ pub async fn save_temp_file_as(
         None => return Ok(None),
     };
 
+    // Refuse to save over a file already open in another tab/window: re-keying onto
+    // its buffer id would replace that buffer and drop its unsaved content.
+    if new_path != source_path {
+        let already_open: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM open_tabs WHERE file_path = ? AND tab_id != ?",
+        )
+        .bind(&new_path)
+        .bind(&tab_id)
+        .fetch_one(&state.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        if already_open > 0 {
+            return Err(format!(
+                "\"{}\" is already open in another tab. Close it first, then Save As.",
+                file_name_from_path(&new_path)
+            ));
+        }
+    }
+
     // Write content to the new location.
     let full = frontmatter::compose_with_frontmatter(&jana_id, &content);
     std::fs::write(&new_path, &full).map_err(|e| format!("Failed to save file: {}", e))?;
@@ -432,19 +461,19 @@ pub async fn save_temp_file_as(
         .map_err(|e| e.to_string())?;
 
     // Re-key the buffer (temp path → real path) before the old file may be removed.
-    let buffer_id = buffers::rekey_buffer(&registry, &file_path, &new_path, &jana_id, &content)
+    let buffer_id = buffers::rekey_buffer(&registry, &source_path, &new_path, &jana_id, &content)
         .map(|(id, _version)| id)
         .unwrap_or_else(|| buffers::canonical_buffer_id(&new_path));
 
     // Remove the old temp file only if no other tab still references it.
-    if is_temp_file(&file_path) {
+    if is_temp_file(&source_path) {
         let others: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM open_tabs WHERE file_path = ?")
-            .bind(&file_path)
+            .bind(&source_path)
             .fetch_one(&state.pool)
             .await
             .map_err(|e| e.to_string())?;
         if others == 0 {
-            let _ = std::fs::remove_file(&file_path);
+            let _ = std::fs::remove_file(&source_path);
         }
     }
 

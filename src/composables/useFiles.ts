@@ -81,10 +81,9 @@ export async function updateTabView(
 }
 
 export async function saveTempFileAs(
-  tabId: string,
-  filePath: string
+  tabId: string
 ): Promise<SaveAsResult | null> {
-  return invoke<SaveAsResult | null>("save_temp_file_as", { tabId, filePath });
+  return invoke<SaveAsResult | null>("save_temp_file_as", { tabId });
 }
 
 export async function forkFile(filePath: string): Promise<string> {

@@ -182,7 +182,7 @@ async function handleSaveAs(tabId: string) {
     if (activeTabId.value === tabId) {
       await editorRef.value?.immediatelySave();
     }
-    const result = await saveTempFileAs(tabId, tab.filePath);
+    const result = await saveTempFileAs(tabId);
     if (!result) return;
     // The file moved temp → real: update the tab and clear its dirty marker.
     dirtyFiles.value.delete(tab.filePath);
