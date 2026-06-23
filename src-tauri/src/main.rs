@@ -22,6 +22,20 @@ fn main() {
         .manage(db_state)
         .manage(buffers::BufferRegistry::default())
         .on_menu_event(|app, event| menu::handle_event(app, event.id().0.as_str()))
+        .on_window_event(|window, event| {
+            // When a window closes, release the buffers its tabs held so refcounts
+            // drop and a dirty last view flushes — otherwise closing one window (with
+            // others still open) leaks references and skips that final flush.
+            if let tauri::WindowEvent::Destroyed = event {
+                let app = window.app_handle().clone();
+                let window_id = commands::files::window_id_from_label(window.label());
+                let registry = app.state::<buffers::BufferRegistry>().inner().clone();
+                let pool = app.state::<DbState>().pool.clone();
+                tauri::async_runtime::block_on(async move {
+                    commands::files::release_window_buffers(&pool, &registry, &window_id).await;
+                });
+            }
+        })
         .setup(|app| {
             // Native menu bar; custom items are relayed to the focused window.
             let app_menu = menu::build(app.handle())?;

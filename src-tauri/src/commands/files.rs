@@ -244,6 +244,34 @@ pub async fn create_app_window(
     Ok(window_id)
 }
 
+/// Map a Tauri window label to its session `window_id`. Secondary windows are
+/// labelled `win-<id>` (see `create_app_window`); the main window's label is its id.
+pub fn window_id_from_label(label: &str) -> String {
+    label.strip_prefix("win-").unwrap_or(label).to_string()
+}
+
+/// Release one backend buffer reference for every tab a window held. Called when a
+/// window is destroyed so its buffers' refcounts drop (and a dirty last view flushes)
+/// instead of leaking. The `open_tabs` rows are left intact for session restore.
+pub async fn release_window_buffers(
+    pool: &SqlitePool,
+    registry: &BufferRegistry,
+    window_id: &str,
+) {
+    let paths: Vec<String> =
+        sqlx::query_scalar("SELECT file_path FROM open_tabs WHERE window_id = ?")
+            .bind(window_id)
+            .fetch_all(pool)
+            .await
+            .unwrap_or_default();
+    for path in paths {
+        let buffer_id = buffers::canonical_buffer_id(&path);
+        if let Err(e) = buffers::release_in_registry(registry, &buffer_id) {
+            eprintln!("window cleanup: failed to release {}: {}", path, e);
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn list_tabs(
     window_id: String,
