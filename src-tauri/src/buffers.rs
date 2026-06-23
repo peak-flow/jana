@@ -207,27 +207,40 @@ pub async fn update_buffer(
 }
 
 /// Drop a view's reference. When the last view is released, the buffer is flushed
-/// to disk (if dirty) and removed from the registry.
+/// to disk (if dirty) and only then removed from the registry — a failed write
+/// leaves the buffer registered so unsaved content is never discarded.
 #[tauri::command]
 pub async fn release_buffer(
     buffer_id: String,
     registry: State<'_, BufferRegistry>,
 ) -> Result<(), String> {
-    let to_flush = {
+    release_in_registry(&registry, &buffer_id)
+}
+
+/// Refcount-aware release + flush, factored out of the command so it is unit-testable.
+pub fn release_in_registry(registry: &BufferRegistry, buffer_id: &str) -> Result<(), String> {
+    // Phase 1 (locked): drop the ref. If this was the last view, a clean buffer is
+    // evicted immediately; a dirty one is snapshotted but left registered until its
+    // write succeeds, so we never remove content that isn't safely on disk yet.
+    let snapshot = {
         let mut map = registry.lock();
-        match map.get_mut(&buffer_id) {
+        match map.get_mut(buffer_id) {
             Some(buf) => {
                 if buf.refcount > 0 {
                     buf.refcount -= 1;
                 }
                 if buf.refcount == 0 {
-                    let data = if buf.dirty() {
-                        Some((buf.file_path.clone(), buf.jana_id.clone(), buf.content.clone()))
+                    if buf.dirty() {
+                        Some((
+                            buf.file_path.clone(),
+                            buf.jana_id.clone(),
+                            buf.content.clone(),
+                            buf.version,
+                        ))
                     } else {
+                        map.remove(buffer_id);
                         None
-                    };
-                    map.remove(&buffer_id);
-                    data
+                    }
                 } else {
                     None
                 }
@@ -235,9 +248,31 @@ pub async fn release_buffer(
             None => None,
         }
     };
-    if let Some((file_path, jana_id, content)) = to_flush {
-        let full = frontmatter::compose_with_frontmatter(&jana_id, &content);
-        std::fs::write(&file_path, &full).map_err(|e| format!("Failed to flush buffer: {}", e))?;
+
+    let Some((file_path, jana_id, content, version)) = snapshot else {
+        return Ok(());
+    };
+
+    // Phase 2 (unlocked): write the final content. On failure the buffer stays
+    // registered with its unsaved content and the error surfaces to the caller.
+    let full = frontmatter::compose_with_frontmatter(&jana_id, &content);
+    std::fs::write(&file_path, &full).map_err(|e| format!("Failed to flush buffer: {}", e))?;
+
+    // Phase 3 (locked): the write landed. Mark what we saved, and evict only if the
+    // buffer is still unreferenced and unchanged. If it was re-acquired or edited
+    // mid-write, keep it — the next release/flush will persist any newer content.
+    let mut map = registry.lock();
+    let mut evict = false;
+    if let Some(buf) = map.get_mut(buffer_id) {
+        if buf.version == version {
+            buf.last_saved_version = version;
+            if buf.refcount == 0 {
+                evict = true;
+            }
+        }
+    }
+    if evict {
+        map.remove(buffer_id);
     }
     Ok(())
 }
@@ -421,6 +456,67 @@ mod tests {
 
         assert_eq!(reg.lock().get(&key).unwrap().jana_id, "new-jid");
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn release_flushes_dirty_then_evicts_last_view() {
+        let path = temp_path("release_flush.md");
+        let _ = std::fs::remove_file(&path);
+        let reg = BufferRegistry::default();
+        // last view (refcount 1) and dirty (version 2 > saved 0).
+        insert_buffer(&reg, &path, &path, "jid-r", "saved body", 2, 0, 0);
+
+        release_in_registry(&reg, &path).unwrap();
+
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        assert!(on_disk.contains("jana_id: jid-r"), "identity written");
+        assert!(on_disk.contains("saved body"), "content written");
+        assert!(reg.lock().get(&path).is_none(), "evicted only after a successful write");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn release_keeps_buffer_when_flush_write_fails() {
+        // A path inside a directory that does not exist makes std::fs::write fail.
+        let bad = "/jana-nonexistent-dir-xyz/keep_me.md";
+        let key = "k-fail";
+        let reg = BufferRegistry::default();
+        insert_buffer(&reg, key, bad, "jid", "precious unsaved text", 1, 0, 0);
+
+        let res = release_in_registry(&reg, key);
+
+        assert!(res.is_err(), "write failure is surfaced");
+        let map = reg.lock();
+        let buf = map.get(key).expect("buffer retained after failed flush");
+        assert_eq!(buf.content, "precious unsaved text", "content preserved in registry");
+    }
+
+    #[test]
+    fn release_decrements_without_flushing_when_views_remain() {
+        let path = temp_path("release_multi.md");
+        let _ = std::fs::remove_file(&path);
+        let reg = BufferRegistry::default();
+        insert_buffer(&reg, &path, &path, "jid", "x", 1, 0, 0);
+        reg.lock().get_mut(&path).unwrap().refcount = 2; // a second view exists
+
+        release_in_registry(&reg, &path).unwrap();
+
+        assert_eq!(reg.lock().get(&path).unwrap().refcount, 1, "still referenced");
+        assert!(!std::path::Path::new(&path).exists(), "no write while views remain");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn release_clean_buffer_evicts_without_writing() {
+        let path = temp_path("release_clean.md");
+        let _ = std::fs::remove_file(&path);
+        let reg = BufferRegistry::default();
+        insert_buffer(&reg, &path, &path, "jid", "x", 2, 2, 0); // clean: version == saved
+
+        release_in_registry(&reg, &path).unwrap();
+
+        assert!(reg.lock().get(&path).is_none(), "evicted");
+        assert!(!std::path::Path::new(&path).exists(), "no write for a clean buffer");
     }
 
     #[test]
