@@ -22,6 +22,8 @@ pub struct AiInteraction {
 
 const SUMMARY_SYSTEM: &str = "Summarize the following note concisely. Focus on key points and action items. Return only the summary, no preamble.";
 
+const NAME_SYSTEM: &str = "Suggest a short, descriptive file name for the following note based on its content. Use lowercase kebab-case (words separated by hyphens), 2 to 5 words, with no file extension, no path, and no surrounding quotes. Respond with only the file name and nothing else.";
+
 fn http_client() -> Result<reqwest::Client, String> {
     // Generous timeout — reasoning models (gpt-5.x, o-series, Claude with thinking)
     // can take well over a minute to produce a summary.
@@ -121,10 +123,11 @@ struct ResponseMessage {
     content: String,
 }
 
-async fn summarize_openai_compat(
+async fn complete_openai_compat(
     url: &str,
     model: &str,
     api_key: Option<&str>,
+    system: &str,
     content: String,
 ) -> Result<String, String> {
     let request = OpenAIRequest {
@@ -132,7 +135,7 @@ async fn summarize_openai_compat(
         messages: vec![
             ChatMessage {
                 role: "system".to_string(),
-                content: SUMMARY_SYSTEM.to_string(),
+                content: system.to_string(),
             },
             ChatMessage {
                 role: "user".to_string(),
@@ -187,15 +190,16 @@ struct ResponsesContent {
     text: String,
 }
 
-async fn summarize_openai_responses(
+async fn complete_openai_responses(
     model: &str,
     api_key: &str,
+    system: &str,
     content: String,
 ) -> Result<String, String> {
     // No `temperature`: reasoning models (gpt-5.x, o-series) reject it.
     let request = ResponsesRequest {
         model: model.to_string(),
-        instructions: SUMMARY_SYSTEM.to_string(),
+        instructions: system.to_string(),
         input: content,
     };
 
@@ -245,11 +249,17 @@ struct AnthropicBlock {
     text: String,
 }
 
-async fn summarize_anthropic(model: &str, api_key: &str, content: String) -> Result<String, String> {
+async fn complete_anthropic(
+    model: &str,
+    api_key: &str,
+    system: &str,
+    content: String,
+    max_tokens: u32,
+) -> Result<String, String> {
     let request = AnthropicRequest {
         model: model.to_string(),
-        max_tokens: 2048,
-        system: SUMMARY_SYSTEM.to_string(),
+        max_tokens,
+        system: system.to_string(),
         messages: vec![ChatMessage {
             role: "user".to_string(),
             content,
@@ -322,7 +332,12 @@ struct GeminiRespPart {
     text: String,
 }
 
-async fn summarize_gemini(model: &str, api_key: &str, content: String) -> Result<String, String> {
+async fn complete_gemini(
+    model: &str,
+    api_key: &str,
+    system: &str,
+    content: String,
+) -> Result<String, String> {
     let url = format!(
         "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
         model
@@ -330,7 +345,7 @@ async fn summarize_gemini(model: &str, api_key: &str, content: String) -> Result
     let request = GeminiRequest {
         system_instruction: GeminiSystem {
             parts: vec![GeminiPart {
-                text: SUMMARY_SYSTEM.to_string(),
+                text: system.to_string(),
             }],
         },
         contents: vec![GeminiContent {
@@ -357,62 +372,76 @@ fn missing_key(provider: &str) -> String {
     format!("No API key set for {}. Add it in Settings.", provider)
 }
 
-#[tauri::command]
-pub async fn summarize_file(
-    jana_id: String,
-    file_path: String,
-    state: State<'_, DbState>,
-) -> Result<AiInteraction, String> {
-    let provider = get_setting(&state.pool, "ai_provider", "local").await;
-
-    let raw = std::fs::read_to_string(&file_path)
-        .map_err(|e| format!("Failed to read file: {}", e))?;
-    let content = frontmatter::parse_frontmatter(&raw).content;
-
-    let (summary_text, model) = match provider.as_str() {
+/// Run `content` through whichever provider is configured, using `system` as the
+/// instruction. `anthropic_max_tokens` caps the Anthropic response (other providers
+/// rely on the prompt to bound length). Returns the generated text and the resolved
+/// model id. Shared by `summarize_file` and `suggest_name`.
+async fn run_completion(
+    pool: &sqlx::SqlitePool,
+    system: &str,
+    content: String,
+    anthropic_max_tokens: u32,
+) -> Result<(String, String), String> {
+    let provider = get_setting(pool, "ai_provider", "local").await;
+    match provider.as_str() {
         "openai" => {
-            let model = get_setting(&state.pool, "openai_model", "gpt-4o-mini").await;
+            let model = get_setting(pool, "openai_model", "gpt-4o-mini").await;
             let key = secrets::get_api_key("openai").ok_or_else(|| missing_key("OpenAI"))?;
-            (summarize_openai_responses(&model, &key, content).await?, model)
+            Ok((complete_openai_responses(&model, &key, system, content).await?, model))
         }
         "anthropic" => {
-            let model = get_setting(&state.pool, "anthropic_model", "claude-opus-4-8").await;
+            let model = get_setting(pool, "anthropic_model", "claude-opus-4-8").await;
             let key = secrets::get_api_key("anthropic").ok_or_else(|| missing_key("Claude"))?;
-            (summarize_anthropic(&model, &key, content).await?, model)
+            Ok((
+                complete_anthropic(&model, &key, system, content, anthropic_max_tokens).await?,
+                model,
+            ))
         }
         "gemini" => {
-            let model = get_setting(&state.pool, "gemini_model", "gemini-2.0-flash").await;
+            let model = get_setting(pool, "gemini_model", "gemini-2.0-flash").await;
             let key = secrets::get_api_key("gemini").ok_or_else(|| missing_key("Gemini"))?;
-            (summarize_gemini(&model, &key, content).await?, model)
+            Ok((complete_gemini(&model, &key, system, content).await?, model))
         }
         _ => {
             // Local OpenAI-compatible endpoint (e.g. LM Studio) — no API key.
             let url = get_setting(
-                &state.pool,
+                pool,
                 "llm_url",
                 "http://192.168.77.1:1234/v1/chat/completions",
             )
             .await;
-            let model = get_setting(&state.pool, "llm_model", "qwen3-vl-30b").await;
-            (summarize_openai_compat(&url, &model, None, content).await?, model)
+            let model = get_setting(pool, "llm_model", "qwen3-vl-30b").await;
+            Ok((
+                complete_openai_compat(&url, &model, None, system, content).await?,
+                model,
+            ))
         }
-    };
+    }
+}
 
-    let now = chrono::Utc::now().timestamp();
+/// Upsert an AI interaction for a file: replace any existing row of the same
+/// `interaction_type` for this `jana_id`, then insert the new one.
+async fn store_interaction(
+    pool: &sqlx::SqlitePool,
+    jana_id: &str,
+    interaction_type: &str,
+    response: String,
+    model: String,
+) -> Result<AiInteraction, String> {
     let interaction = AiInteraction {
         id: Uuid::new_v4().to_string(),
-        jana_id: jana_id.clone(),
-        interaction_type: "summary".to_string(),
+        jana_id: jana_id.to_string(),
+        interaction_type: interaction_type.to_string(),
         prompt: None,
-        response: summary_text,
+        response,
         model,
-        created_at: now,
+        created_at: chrono::Utc::now().timestamp(),
     };
 
-    // Upsert: replace existing summary for this jana_id
-    sqlx::query("DELETE FROM file_ai_interactions WHERE jana_id = ? AND interaction_type = 'summary'")
-        .bind(&jana_id)
-        .execute(&state.pool)
+    sqlx::query("DELETE FROM file_ai_interactions WHERE jana_id = ? AND interaction_type = ?")
+        .bind(jana_id)
+        .bind(interaction_type)
+        .execute(pool)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -426,11 +455,56 @@ pub async fn summarize_file(
     .bind(&interaction.response)
     .bind(&interaction.model)
     .bind(interaction.created_at)
-    .execute(&state.pool)
+    .execute(pool)
     .await
     .map_err(|e| e.to_string())?;
 
     Ok(interaction)
+}
+
+#[tauri::command]
+pub async fn summarize_file(
+    jana_id: String,
+    file_path: String,
+    state: State<'_, DbState>,
+) -> Result<AiInteraction, String> {
+    let raw = std::fs::read_to_string(&file_path)
+        .map_err(|e| format!("Failed to read file: {}", e))?;
+    let content = frontmatter::parse_frontmatter(&raw).content;
+
+    let (summary_text, model) = run_completion(&state.pool, SUMMARY_SYSTEM, content, 2048).await?;
+    store_interaction(&state.pool, &jana_id, "summary", summary_text, model).await
+}
+
+/// Trim an LLM name suggestion down to a single clean file name: first non-empty
+/// line, with surrounding quotes/backticks and a trailing period stripped.
+fn clean_name_suggestion(raw: &str) -> String {
+    raw.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("")
+        .trim_matches(|c| c == '"' || c == '\'' || c == '`' || c == '.')
+        .trim()
+        .to_string()
+}
+
+#[tauri::command]
+pub async fn suggest_name(
+    jana_id: String,
+    file_path: String,
+    state: State<'_, DbState>,
+) -> Result<AiInteraction, String> {
+    let raw = std::fs::read_to_string(&file_path)
+        .map_err(|e| format!("Failed to read file: {}", e))?;
+    let content = frontmatter::parse_frontmatter(&raw).content;
+
+    // A file name is short, so cap Anthropic output tightly.
+    let (name_text, model) = run_completion(&state.pool, NAME_SYSTEM, content, 64).await?;
+    let name = clean_name_suggestion(&name_text);
+    if name.is_empty() {
+        return Err("The model returned an empty name suggestion.".to_string());
+    }
+    store_interaction(&state.pool, &jana_id, "name_suggestion", name, model).await
 }
 
 #[tauri::command]
@@ -442,6 +516,23 @@ pub async fn get_file_summary(
         "SELECT id, jana_id, interaction_type, prompt, response, model, created_at
          FROM file_ai_interactions
          WHERE jana_id = ? AND interaction_type = 'summary'
+         ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(&jana_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_name_suggestion(
+    jana_id: String,
+    state: State<'_, DbState>,
+) -> Result<Option<AiInteraction>, String> {
+    sqlx::query_as::<_, AiInteraction>(
+        "SELECT id, jana_id, interaction_type, prompt, response, model, created_at
+         FROM file_ai_interactions
+         WHERE jana_id = ? AND interaction_type = 'name_suggestion'
          ORDER BY created_at DESC LIMIT 1",
     )
     .bind(&jana_id)

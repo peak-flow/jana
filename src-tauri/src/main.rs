@@ -69,6 +69,8 @@ fn main() {
             buffers::release_buffer,
             commands::llm::summarize_file,
             commands::llm::get_file_summary,
+            commands::llm::suggest_name,
+            commands::llm::get_name_suggestion,
             commands::llm::list_models,
             commands::settings::get_settings,
             commands::settings::save_settings,
