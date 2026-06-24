@@ -4,7 +4,7 @@ import { EditorState, ChangeSet, Annotation } from "@codemirror/state";
 import { EditorView, keymap, lineNumbers, highlightActiveLine } from "@codemirror/view";
 import { markdown } from "@codemirror/lang-markdown";
 import { oneDark } from "@codemirror/theme-one-dark";
-import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { defaultKeymap, history, historyKeymap, insertTab, indentLess } from "@codemirror/commands";
 import { search, searchKeymap, highlightSelectionMatches } from "@codemirror/search";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getBuffer, updateBuffer, flushBuffer } from "../composables/useFiles";
@@ -140,7 +140,14 @@ function createEditor(content: string) {
       lineNumbers(),
       highlightActiveLine(),
       history(),
-      keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
+      // Tab indents (inserts at cursor, or block-indents a multi-line selection),
+      // Shift-Tab dedents — IDE-style. Listed first so it wins over defaultKeymap.
+      keymap.of([
+        { key: "Tab", run: insertTab, shift: indentLess },
+        ...defaultKeymap,
+        ...historyKeymap,
+        ...searchKeymap,
+      ]),
       search(),
       highlightSelectionMatches(),
       markdown(),
