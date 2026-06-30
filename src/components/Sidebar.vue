@@ -1,34 +1,48 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from "vue";
-import type { ActiveFile } from "../App.vue";
+import type { TabView } from "../App.vue";
 
 defineProps<{
-  openFiles: ActiveFile[];
-  activeFilePath: string | null;
+  tabs: TabView[];
+  activeTabId: string | null;
+  dirtyFiles: Set<string>;
 }>();
 
 const emit = defineEmits<{
   (e: "open-file"): void;
   (e: "new-file"): void;
-  (e: "select-file", filePath: string): void;
-  (e: "close-file", filePath: string): void;
+  (e: "new-window"): void;
+  (e: "select-tab", tabId: string): void;
+  (e: "close-tab", tabId: string): void;
   (e: "open-settings"): void;
   (e: "fork-file", filePath: string): void;
   (e: "clear-history", janaId: string): void;
   (e: "reveal-in-finder", filePath: string): void;
-  (e: "save-as", filePath: string, janaId: string): void;
+  (e: "save-as", tabId: string): void;
 }>();
 
-const contextMenu = ref<{ x: number; y: number; filePath: string; janaId: string } | null>(null);
+const contextMenu = ref<{
+  x: number;
+  y: number;
+  tabId: string;
+  filePath: string;
+  janaId: string;
+} | null>(null);
 
-function handleCloseFile(event: Event, filePath: string) {
+function handleCloseTab(event: Event, tabId: string) {
   event.stopPropagation();
-  emit("close-file", filePath);
+  emit("close-tab", tabId);
 }
 
-function openContextMenu(event: MouseEvent, file: ActiveFile) {
+function openContextMenu(event: MouseEvent, tab: TabView) {
   event.preventDefault();
-  contextMenu.value = { x: event.clientX, y: event.clientY, filePath: file.filePath, janaId: file.janaId };
+  contextMenu.value = {
+    x: event.clientX,
+    y: event.clientY,
+    tabId: tab.tabId,
+    filePath: tab.filePath,
+    janaId: tab.janaId,
+  };
 }
 
 function closeContextMenu() {
@@ -58,13 +72,17 @@ function handleReveal() {
 
 function handleSaveAs() {
   if (contextMenu.value) {
-    emit("save-as", contextMenu.value.filePath, contextMenu.value.janaId);
+    emit("save-as", contextMenu.value.tabId);
   }
   closeContextMenu();
 }
 
 function onDocumentClick() {
   closeContextMenu();
+}
+
+function isTempFile(filePath: string): boolean {
+  return filePath.includes('/jana/temp/');
 }
 
 onMounted(() => {
@@ -87,25 +105,35 @@ onUnmounted(() => {
           </svg>
         </button>
         <button class="header-btn" @click="emit('new-file')" title="New File (Cmd+N)">+</button>
+        <button class="header-btn" @click="emit('new-window')" title="New Window (Cmd+Shift+N)">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+            <rect x="2" y="2" width="9" height="9" rx="1" stroke="currentColor" stroke-width="1.3"/>
+            <path d="M6 6h7a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V6z" fill="#181825" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+          </svg>
+        </button>
       </div>
     </div>
     <div class="file-list">
       <div
-        v-for="file in openFiles"
-        :key="file.filePath"
+        v-for="tab in tabs"
+        :key="tab.tabId"
         class="file-item"
-        :class="{ active: file.filePath === activeFilePath }"
-        @click="emit('select-file', file.filePath)"
-        @contextmenu="openContextMenu($event, file)"
+        :class="{ active: tab.tabId === activeTabId }"
+        @click="emit('select-tab', tab.tabId)"
+        @contextmenu="openContextMenu($event, tab)"
       >
-        <span class="file-name" :class="{ 'temp-file': file.fileName.startsWith('Untitled ') }">{{ file.fileName }}</span>
+        <span class="file-name" :class="{ 'temp-file': isTempFile(tab.filePath) }">
+          <span v-if="isTempFile(tab.filePath)" class="temp-indicator" title="Temporary file — use Save As to choose a permanent location">○</span>
+          <span v-if="dirtyFiles.has(tab.filePath)" class="dirty-indicator" title="Unsaved changes">•</span>
+          {{ tab.fileName }}
+        </span>
         <button
           class="close-btn"
-          @click="handleCloseFile($event, file.filePath)"
+          @click="handleCloseTab($event, tab.tabId)"
           title="Close"
         >&times;</button>
       </div>
-      <div v-if="openFiles.length === 0" class="empty-state">
+      <div v-if="tabs.length === 0" class="empty-state">
         No files open
       </div>
     </div>
@@ -136,8 +164,6 @@ onUnmounted(() => {
 
 <style scoped>
 .sidebar {
-  width: 200px;
-  min-width: 200px;
   border-right: 1px solid #313244;
   display: flex;
   flex-direction: column;
@@ -211,6 +237,18 @@ onUnmounted(() => {
 .file-name.temp-file {
   font-style: italic;
   color: #a6adc8;
+}
+
+.temp-indicator {
+  color: #89b4fa;
+  margin-right: 2px;
+  font-weight: bold;
+}
+
+.dirty-indicator {
+  color: #f9e2af;
+  margin-right: 4px;
+  font-weight: bold;
 }
 
 .close-btn {

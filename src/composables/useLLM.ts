@@ -22,3 +22,16 @@ export async function getFileSummary(
 ): Promise<AiInteraction | null> {
   return invoke<AiInteraction | null>("get_file_summary", { janaId });
 }
+
+export async function suggestName(
+  janaId: string,
+  filePath: string
+): Promise<AiInteraction> {
+  return invoke<AiInteraction>("suggest_name", { janaId, filePath });
+}
+
+export async function getNameSuggestion(
+  janaId: string
+): Promise<AiInteraction | null> {
+  return invoke<AiInteraction | null>("get_name_suggestion", { janaId });
+}

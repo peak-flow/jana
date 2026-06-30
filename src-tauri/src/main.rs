@@ -1,10 +1,14 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod buffers;
 mod commands;
 mod db;
 mod frontmatter;
+mod menu;
+mod secrets;
 
 use db::DbState;
+use tauri::Manager;
 
 fn main() {
     let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
@@ -13,27 +17,77 @@ fn main() {
         DbState::init().await.expect("Failed to initialize database")
     });
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(db_state)
+        .manage(buffers::BufferRegistry::default())
+        .on_menu_event(|app, event| menu::handle_event(app, event.id().0.as_str()))
+        .on_window_event(|window, event| {
+            // When a window closes, release the buffers its tabs held so refcounts
+            // drop and a dirty last view flushes — otherwise closing one window (with
+            // others still open) leaks references and skips that final flush.
+            if let tauri::WindowEvent::Destroyed = event {
+                let app = window.app_handle().clone();
+                let window_id = commands::files::window_id_from_label(window.label());
+                let registry = app.state::<buffers::BufferRegistry>().inner().clone();
+                let pool = app.state::<DbState>().pool.clone();
+                tauri::async_runtime::block_on(async move {
+                    commands::files::release_window_buffers(&pool, &registry, &window_id).await;
+                });
+            }
+        })
+        .setup(|app| {
+            // Native menu bar; custom items are relayed to the focused window.
+            let app_menu = menu::build(app.handle())?;
+            app.set_menu(app_menu)?;
+
+            // Single disk writer: periodically flush dirty, idle buffers to disk.
+            let registry = app.state::<buffers::BufferRegistry>().inner().clone();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_millis(1000));
+                buffers::flush_idle_buffers(&registry);
+            });
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::files::create_new_file,
             commands::files::open_file_dialog,
-            commands::files::read_file,
-            commands::files::save_file,
-            commands::files::save_file_as,
+            commands::files::add_tab,
+            commands::files::create_app_window,
             commands::files::save_temp_file_as,
-            commands::files::close_file,
-            commands::files::list_open_files,
-            commands::files::update_cursor_position,
+            commands::files::close_tab,
+            commands::files::delete_temp_file_if_orphaned,
+            commands::files::list_tabs,
+            commands::files::update_tab_view,
             commands::files::fork_file,
             commands::files::clear_ai_history,
             commands::files::reveal_in_finder,
+            buffers::acquire_buffer,
+            buffers::get_buffer,
+            buffers::update_buffer,
+            buffers::flush_buffer,
+            buffers::release_buffer,
             commands::llm::summarize_file,
             commands::llm::get_file_summary,
+            commands::llm::suggest_name,
+            commands::llm::get_name_suggestion,
+            commands::llm::list_models,
             commands::settings::get_settings,
             commands::settings::save_settings,
+            secrets::set_api_key,
+            secrets::has_api_key,
+            secrets::delete_api_key,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|app_handle, event| {
+        // Flush any unsaved buffers before the process exits, surfacing any failures.
+        if let tauri::RunEvent::ExitRequested { .. } = event {
+            let registry = app_handle.state::<buffers::BufferRegistry>();
+            for (path, err) in buffers::flush_all(&registry) {
+                eprintln!("exit flush failed for {}: {}", path, err);
+            }
+        }
+    });
 }
